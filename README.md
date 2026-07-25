@@ -3,7 +3,8 @@
 [![CI](https://github.com/inknexlab/sed-language-server/actions/workflows/ci.yml/badge.svg)](https://github.com/inknexlab/sed-language-server/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@inknexlab/sed-language-server)](https://www.npmjs.com/package/@inknexlab/sed-language-server)
 
-A Language Server Protocol implementation for POSIX and GNU `sed`.
+A Language Server Protocol implementation for POSIX and GNU `sed`, with
+explicit BRE and ERE support.
 
 ## Installation
 
@@ -13,36 +14,32 @@ Requires Node.js 22 or later.
 npm install --global @inknexlab/sed-language-server
 ```
 
-Start the server with:
-
-```sh
-sed-language-server --stdio
-```
-
 ## Features
 
-- Tree-sitter-based diagnostics
-- go to definition from `b`, `t`, and GNU `T` label references
-- document formatting for command lists and nested blocks
+- Diagnostics
+- Document formatting
+- Go to definition
 
 ## Configuration
 
-The default dialect is `posix`. To use GNU syntax, pass the following LSP
-initialization options:
+Pass `dialect` and `regex` as LSP initialization options:
 
-```json
-{
-  "dialect": "gnu"
-}
-```
+| `dialect` | `regex` | Syntax |
+| --- | --- | --- |
+| `"posix"` | `"bre"` | POSIX sed with basic regular expressions |
+| `"posix"` | `"ere"` | POSIX sed with extended regular expressions |
+| `"gnu"` | `"bre"` | GNU sed with basic regular expressions |
+| `"gnu"` | `"ere"` | GNU sed with extended regular expressions |
+
+The defaults are `"posix"` and `"bre"`. The selection remains fixed for the
+server process.
 
 ## Editor setup
 
 Configure the LSP client to run `sed-language-server --stdio` for the `sed`
-language ID or filetype. The examples enable GNU syntax; omit the dialect
-option to use the default POSIX dialect.
+language ID or filetype.
 
-For example, with Emacs and Eglot:
+### Emacs
 
 ```elisp
 (require 'eglot)
@@ -50,35 +47,21 @@ For example, with Emacs and Eglot:
 (add-to-list 'eglot-server-programs
              '((sed-ts-mode sed-mode) .
                ("sed-language-server" "--stdio"
-                :initializationOptions (:dialect "gnu"))))
+                :initializationOptions (:dialect "posix" :regex "bre"))))
 ```
 
 Run `M-x eglot` in a `sed-ts-mode` or `sed-mode` buffer.
 
-For Neovim 0.11 or later:
+### Neovim
 
 ```lua
 vim.lsp.config("sed_language_server", {
   cmd = { "sed-language-server", "--stdio" },
   filetypes = { "sed" },
-  init_options = { dialect = "gnu" },
+  init_options = { dialect = "posix", regex = "bre" },
 })
 
 vim.lsp.enable("sed_language_server")
-```
-
-## Development
-
-```sh
-npm ci
-npm run check
-npm test
-```
-
-To rebuild the bundled grammar Wasm files from `tree-sitter-sed`:
-
-```sh
-npm run build:grammar -- /path/to/tree-sitter-sed
 ```
 
 ## License

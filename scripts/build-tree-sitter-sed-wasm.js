@@ -3,7 +3,8 @@ import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const treeSitterSedRevision = "5a94778b0d176a21c3df07b8db495d00ca839a64";
+const treeSitterSedRevision = "b75dcb50fe259cea7d53036e915bdead3f8457ae";
+const variants = ["posix-bre", "posix-ere", "gnu-bre", "gnu-ere"];
 const grammarDirectoryArgument = process.argv[2];
 
 if (grammarDirectoryArgument === undefined) {
@@ -54,8 +55,8 @@ if (statusResult.stdout.trim() !== "") {
 
 mkdirSync(vendorDirectory, { recursive: true });
 
-for (const dialect of ["posix", "gnu"]) {
-  const sourceDirectory = resolve(grammarDirectory, dialect);
+for (const variant of variants) {
+  const sourceDirectory = resolve(grammarDirectory, variant);
   const parserSource = resolve(sourceDirectory, "src/parser.c");
   if (!existsSync(parserSource)) {
     throw new Error(`Missing generated parser: ${parserSource}`);
@@ -63,7 +64,7 @@ for (const dialect of ["posix", "gnu"]) {
 
   const outputPath = resolve(
     vendorDirectory,
-    `tree-sitter-sed-${dialect}.wasm`,
+    `tree-sitter-sed-${variant}.wasm`,
   );
 
   const buildResult = spawnSync(
@@ -72,7 +73,7 @@ for (const dialect of ["posix", "gnu"]) {
     { stdio: "inherit" },
   );
   if (buildResult.status !== 0) {
-    throw new Error(`Failed to build the ${dialect} sed grammar.`, {
+    throw new Error(`Failed to build the ${variant} sed grammar.`, {
       cause: buildResult.error,
     });
   }

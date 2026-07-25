@@ -3,21 +3,27 @@ import { Language, Parser } from "web-tree-sitter";
 
 await Parser.init();
 
-async function createParser(dialect) {
+async function createParser(key) {
   const path = fileURLToPath(
-    new URL(`../vendor/tree-sitter-sed-${dialect}.wasm`, import.meta.url),
+    new URL(`../vendor/tree-sitter-sed-${key}.wasm`, import.meta.url),
   );
   return new Parser().setLanguage(await Language.load(path));
 }
 
 const parsers = {
-  posix: await createParser("posix"),
-  gnu: await createParser("gnu"),
+  "posix-bre": await createParser("posix-bre"),
+  "posix-ere": await createParser("posix-ere"),
+  "gnu-bre": await createParser("gnu-bre"),
+  "gnu-ere": await createParser("gnu-ere"),
 };
-
 const documentTrees = new Map();
 
-export function syntaxTreeFor(document, dialect) {
+function keyForSyntax(syntax) {
+  return `${syntax.dialect}-${syntax.regex}`;
+}
+
+export function syntaxTreeFor(document, syntax) {
+  const key = keyForSyntax(syntax);
   const source = document.getText();
   let trees = documentTrees.get(document.uri);
 
@@ -26,7 +32,7 @@ export function syntaxTreeFor(document, dialect) {
     documentTrees.set(document.uri, trees);
   }
 
-  const cached = trees.get(dialect);
+  const cached = trees.get(key);
   if (
     cached !== undefined &&
     cached.version === document.version &&
@@ -36,12 +42,17 @@ export function syntaxTreeFor(document, dialect) {
   }
 
   cached?.tree.delete();
-  const tree = parsers[dialect].parse(source);
-  if (tree === null) {
-    throw new Error(`Failed to parse ${dialect} sed source.`);
+  const parser = parsers[key];
+  if (parser === undefined) {
+    throw new Error(`The ${key} sed parser has not been loaded.`);
   }
 
-  trees.set(dialect, {
+  const tree = parser.parse(source);
+  if (tree === null) {
+    throw new Error(`Failed to parse ${key} sed source.`);
+  }
+
+  trees.set(key, {
     source,
     tree,
     version: document.version,

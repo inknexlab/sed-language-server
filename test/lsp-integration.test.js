@@ -195,7 +195,7 @@ test("serves diagnostics, definitions, and formatting through the LSP document l
       uri,
       languageId: "sed",
       version: 1,
-      text: ":loop\nb loop\n{p;d;}\nz\n",
+      text: ":loop\ns/\\(foo\\)/\\1/g\nb loop\n{p;d;}\nz\n",
     },
   });
 
@@ -207,8 +207,8 @@ test("serves diagnostics, definitions, and formatting through the LSP document l
     {
       severity: DiagnosticSeverity.Error,
       range: {
-        start: { line: 3, character: 0 },
-        end: { line: 3, character: 1 },
+        start: { line: 4, character: 0 },
+        end: { line: 4, character: 1 },
       },
       message: "Unknown sed command: `z`.",
       code: "invalid-command",
@@ -219,7 +219,7 @@ test("serves diagnostics, definitions, and formatting through the LSP document l
   assert.deepEqual(
     await client.request("textDocument/definition", {
       textDocument: { uri },
-      position: { line: 1, character: 4 },
+      position: { line: 2, character: 4 },
     }),
     [
       {
@@ -237,8 +237,8 @@ test("serves diagnostics, definitions, and formatting through the LSP document l
     contentChanges: [
       {
         range: {
-          start: { line: 3, character: 0 },
-          end: { line: 3, character: 1 },
+          start: { line: 4, character: 0 },
+          end: { line: 4, character: 1 },
         },
         text: "p",
       },
@@ -263,9 +263,9 @@ test("serves diagnostics, definitions, and formatting through the LSP document l
       {
         range: {
           start: { line: 0, character: 0 },
-          end: { line: 4, character: 0 },
+          end: { line: 5, character: 0 },
         },
-        newText: ":loop\nb loop\n{\n  p\n  d\n}\np\n",
+        newText: ":loop\ns/\\(foo\\)/\\1/g\nb loop\n{\n  p\n  d\n}\np\n",
       },
     ],
   );
@@ -288,7 +288,7 @@ test("serves diagnostics, definitions, and formatting through the LSP document l
   await shutdown(client);
 });
 
-test("rejects invalid initialization options", async (t) => {
+test("rejects an invalid sed dialect initialization option", async (t) => {
   const client = new LspClient();
   t.after(() => client.dispose());
 
@@ -309,15 +309,37 @@ test("rejects invalid initialization options", async (t) => {
   );
 });
 
-test("keeps the dialect fixed after initialization", async (t) => {
+test("rejects an invalid regular expression initialization option", async (t) => {
   const client = new LspClient();
   t.after(() => client.dispose());
 
-  await initialize(client, { dialect: "gnu" });
+  await assert.rejects(
+    client.request("initialize", {
+      processId: process.pid,
+      rootUri: null,
+      capabilities: {},
+      initializationOptions: {
+        regex: "pcre",
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, ErrorCodes.InvalidParams);
+      assert.match(error.message, /regular expression/);
+      return true;
+    },
+  );
+});
+
+test("uses GNU ERE selected at initialization and keeps both syntax axes fixed", async (t) => {
+  const client = new LspClient();
+  t.after(() => client.dispose());
+
+  await initialize(client, { dialect: "gnu", regex: "ere" });
   await client.notify("workspace/didChangeConfiguration", {
     settings: {
       sedLanguageServer: {
         dialect: "posix",
+        regex: "bre",
       },
     },
   });
@@ -328,7 +350,7 @@ test("keeps the dialect fixed after initialization", async (t) => {
       uri,
       languageId: "sed",
       version: 1,
-      text: "z\n",
+      text: "z\ns/(a)/\\1/\n",
     },
   });
   const diagnostics = await client.waitForNotification(

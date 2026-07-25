@@ -15,8 +15,8 @@ function labelReferenceAt(rootNode, offset) {
   return undefined;
 }
 
-export function createDefinitionLocations(document, position, dialect) {
-  const rootNode = syntaxTreeFor(document, dialect).rootNode;
+export function createDefinitionLocations(document, position, syntax) {
+  const rootNode = syntaxTreeFor(document, syntax).rootNode;
   const offset = document.offsetAt(position);
   const reference =
     labelReferenceAt(rootNode, offset) ??

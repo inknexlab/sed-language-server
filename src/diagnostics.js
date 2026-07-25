@@ -83,6 +83,10 @@ const issueDescriptions = {
     code: "invalid-backreference",
     message: `Back-reference \`${node.text}\` has no matching regular expression group.`,
   }),
+  unsupported_pattern_backreference: {
+    code: "unsupported-pattern-backreference",
+    message: "Pattern back-references are not supported.",
+  },
   invalid_character_range: (node) => ({
     code: "invalid-regular-expression",
     message: `Invalid character range: \`${node.text}\`.`,
@@ -91,14 +95,14 @@ const issueDescriptions = {
     code: "unclosed-bracket-expression",
     message: "Expected `]` to close this bracket expression.",
   },
-  unclosed_regex_group: {
+  unclosed_regex_group: (node) => ({
     code: "invalid-regular-expression",
-    message: "Expected `\\)` to close this regular expression group.",
-  },
-  unexpected_regex_group_close: {
+    message: `Expected \`${node.details.closingText}\` to close this regular expression group.`,
+  }),
+  unexpected_regex_group_close: (node) => ({
     code: "invalid-regular-expression",
-    message: "Unexpected `\\)`; no regular expression group is open.",
-  },
+    message: `Unexpected \`${node.text}\`; no regular expression group is open.`,
+  }),
   invalid_address: (node) => ({
     code: "invalid-address",
     message:
@@ -996,46 +1000,61 @@ function bracketRangeIssueNodes(regex) {
   return issues;
 }
 
-function regexAnalysis(regex) {
+function regexAnalysis(regex, syntax) {
   const issues = [];
   const openGroups = [];
   const closedGroups = new Set();
   let groupCount = 0;
   const tokens = regex
-    .descendantsOfType(["escaped_parenthesis", "backreference_candidate"])
+    .descendantsOfType([
+      "regex_group_open",
+      "regex_group_close",
+      "regex_backreference",
+    ])
     .sort(compareIssueRanges);
 
   for (const token of tokens) {
-    if (token.type === "escaped_parenthesis") {
-      if (token.text === "\\(") {
-        groupCount += 1;
-        openGroups.push({ node: token, number: groupCount });
-      } else if (token.text === "\\)") {
-        const group = openGroups.pop();
-        if (group === undefined) {
+    if (token.type === "regex_group_open") {
+      groupCount += 1;
+      openGroups.push({ node: token, number: groupCount });
+      continue;
+    }
+
+    if (token.type === "regex_group_close") {
+      const group = openGroups.pop();
+      if (group === undefined) {
+        if (syntax.regex === "bre" || syntax.dialect === "gnu") {
           issues.push(issueAt(token, "unexpected_regex_group_close"));
-        } else {
-          closedGroups.add(group.number);
         }
+      } else {
+        closedGroups.add(group.number);
       }
       continue;
     }
 
-    const groupNumber = Number.parseInt(token.text.slice(1), 10);
-    if (!closedGroups.has(groupNumber)) {
-      issues.push(issueAt(token, "invalid_backreference"));
+    if (syntax.dialect === "posix" && syntax.regex === "ere") {
+      issues.push(issueAt(token, "unsupported_pattern_backreference"));
+    } else {
+      const groupNumber = Number.parseInt(token.text.slice(1), 10);
+      if (!closedGroups.has(groupNumber)) {
+        issues.push(issueAt(token, "invalid_backreference"));
+      }
     }
   }
 
   for (const { node } of openGroups) {
-    issues.push(issueAt(node, "unclosed_regex_group"));
+    issues.push(
+      issueAt(node, "unclosed_regex_group", node, {
+        closingText: syntax.regex === "bre" ? "\\)" : ")",
+      }),
+    );
   }
   issues.push(...bracketRangeIssueNodes(regex));
 
   return { groupCount, issues };
 }
 
-function regexIssueNodes(containers) {
+function regexIssueNodes(containers, syntax) {
   const issues = [];
   let previousGroupCount;
 
@@ -1060,7 +1079,7 @@ function regexIssueNodes(containers) {
         }
       }
     } else {
-      const analysis = regexAnalysis(pattern);
+      const analysis = regexAnalysis(pattern, syntax);
       issues.push(...analysis.issues);
       groupCount = analysis.groupCount;
       previousGroupCount = groupCount;
@@ -1151,15 +1170,15 @@ function numericValueIssueNodes(steps, occurrences) {
   return issues;
 }
 
-function semanticIssueNodes(nodesByType, source, dialect) {
+function semanticIssueNodes(nodesByType, source, syntax) {
   const regexContainers = [
     ...nodesByType.regex_address,
     ...nodesByType.substitute_argument,
   ].sort(compareIssueRanges);
 
   return [
-    ...addressIssueNodes(nodesByType.command, source, dialect),
-    ...regexIssueNodes(regexContainers),
+    ...addressIssueNodes(nodesByType.command, source, syntax.dialect),
+    ...regexIssueNodes(regexContainers, syntax),
     ...translationIssueNodes(nodesByType.translate_argument),
     ...numericValueIssueNodes(
       nodesByType.step_value,
@@ -1229,16 +1248,16 @@ function labelDiagnostics(document, definitions, references) {
   );
 }
 
-export function createDiagnostics(document, dialect) {
-  const rootNode = syntaxTreeFor(document, dialect).rootNode;
+export function createDiagnostics(document, syntax) {
+  const rootNode = syntaxTreeFor(document, syntax).rootNode;
   const source = document.getText();
   const nodesByType = collectDiagnosticNodes(rootNode);
   const syntaxIssues = normalizeIssues(
     collectSyntaxIssueNodes(rootNode),
-    dialect,
+    syntax.dialect,
     source,
   );
-  const semanticIssues = semanticIssueNodes(nodesByType, source, dialect);
+  const semanticIssues = semanticIssueNodes(nodesByType, source, syntax);
 
   return [
     ...syntaxIssues.map((node) => issueDiagnostic(document, node)),

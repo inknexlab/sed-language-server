@@ -5,35 +5,36 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { createDiagnostics } from "../src/diagnostics.js";
 import { invalidateSyntaxTreeCache } from "../src/syntax.js";
 
-const posixDialect = "posix";
-const gnuDialect = "gnu";
+const posixBre = { dialect: "posix", regex: "bre" };
+const posixEre = { dialect: "posix", regex: "ere" };
+const gnuBre = { dialect: "gnu", regex: "bre" };
+const gnuEre = { dialect: "gnu", regex: "ere" };
 
 function documentFor(source) {
   return TextDocument.create("file:///diagnostics.sed", "sed", 1, source);
 }
 
-function diagnosticsFor(source, dialect = posixDialect) {
-  return createDiagnostics(documentFor(source), dialect);
+function diagnosticsFor(source, syntax = posixBre) {
+  return createDiagnostics(documentFor(source), syntax);
 }
 
-function summariesFor(source, dialect = posixDialect) {
-  return diagnosticsFor(source, dialect).map(({ code, message, range }) => ({
+function summariesFor(source, syntax = posixBre) {
+  return diagnosticsFor(source, syntax).map(({ code, message, range }) => ({
     code,
     message,
     range,
   }));
 }
 
-test("accepts valid scripts in each selected dialect", () => {
-  assert.deepEqual(
-    summariesFor(":loop\ns/foo/bar/g\nb loop\n", posixDialect),
-    [],
-  );
-  assert.deepEqual(summariesFor("0~2p\nz\nT loop\n:loop\n", gnuDialect), []);
+test("accepts valid scripts in each selected syntax variant", () => {
+  assert.deepEqual(summariesFor(":loop\ns/foo/bar/g\nb loop\n", posixBre), []);
+  assert.deepEqual(summariesFor("s/(foo)+/bar/g\n", posixEre), []);
+  assert.deepEqual(summariesFor("0~2p\nz\nT loop\n:loop\n", gnuBre), []);
+  assert.deepEqual(summariesFor("s/(a|b)+/\\1/\n", gnuEre), []);
 });
 
 test("uses separate POSIX and GNU grammars", () => {
-  assert.deepEqual(diagnosticsFor("z\n", posixDialect), [
+  assert.deepEqual(diagnosticsFor("z\n", posixBre), [
     {
       severity: DiagnosticSeverity.Error,
       range: {
@@ -45,7 +46,7 @@ test("uses separate POSIX and GNU grammars", () => {
       source: "sed-language-server",
     },
   ]);
-  assert.deepEqual(diagnosticsFor("z\n", gnuDialect), []);
+  assert.deepEqual(diagnosticsFor("z\n", gnuBre), []);
 });
 
 test("enforces command address limits", () => {
@@ -79,7 +80,7 @@ test("enforces command address limits", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("1,2Q", gnuDialect), [
+  assert.deepEqual(summariesFor("1,2Q", gnuBre), [
     {
       code: "too-many-addresses",
       message: "The `Q` command accepts at most one address.",
@@ -90,8 +91,8 @@ test("enforces command address limits", () => {
     },
   ]);
   assert.deepEqual(summariesFor("1,2c\\\ntext"), []);
-  assert.deepEqual(summariesFor("1,2a text", gnuDialect), []);
-  assert.deepEqual(summariesFor("1,2r file", gnuDialect), []);
+  assert.deepEqual(summariesFor("1,2a text", gnuBre), []);
+  assert.deepEqual(summariesFor("1,2r file", gnuBre), []);
 });
 
 test("accepts GNU zero addresses only in their defined contexts", () => {
@@ -106,15 +107,15 @@ test("accepts GNU zero addresses only in their defined contexts", () => {
     },
   ];
 
-  assert.deepEqual(summariesFor("0p", gnuDialect), expected);
-  assert.deepEqual(summariesFor("0,2p", gnuDialect), expected);
-  assert.deepEqual(summariesFor("0,/value/p", gnuDialect), []);
-  assert.deepEqual(summariesFor("0r file", gnuDialect), []);
-  assert.deepEqual(summariesFor("0~2p", gnuDialect), []);
+  assert.deepEqual(summariesFor("0p", gnuBre), expected);
+  assert.deepEqual(summariesFor("0,2p", gnuBre), expected);
+  assert.deepEqual(summariesFor("0,/value/p", gnuBre), []);
+  assert.deepEqual(summariesFor("0r file", gnuBre), []);
+  assert.deepEqual(summariesFor("0~2p", gnuBre), []);
 });
 
 test("reports concrete POSIX errors without comparing dialects", () => {
-  assert.deepEqual(summariesFor("0~2p\n", posixDialect), [
+  assert.deepEqual(summariesFor("0~2p\n", posixBre), [
     {
       code: "invalid-address",
       message: "Invalid address syntax: `0~2`.",
@@ -124,7 +125,7 @@ test("reports concrete POSIX errors without comparing dialects", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("1,+2p\n", posixDialect), [
+  assert.deepEqual(summariesFor("1,+2p\n", posixBre), [
     {
       code: "missing-address",
       message: "Expected an address after `,`.",
@@ -134,7 +135,7 @@ test("reports concrete POSIX errors without comparing dialects", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("s/a/b/I\n", posixDialect), [
+  assert.deepEqual(summariesFor("s/a/b/I\n", posixBre), [
     {
       code: "invalid-substitution-flag",
       message: "Unknown substitution flag: `I`.",
@@ -144,7 +145,7 @@ test("reports concrete POSIX errors without comparing dialects", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("{\nd}\n", posixDialect), [
+  assert.deepEqual(summariesFor("{\nd}\n", posixBre), [
     {
       code: "missing-command-separator",
       message: "Expected a newline or `;` before `}`.",
@@ -154,7 +155,7 @@ test("reports concrete POSIX errors without comparing dialects", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("0p\n", posixDialect), [
+  assert.deepEqual(summariesFor("0p\n", posixBre), [
     {
       code: "invalid-address",
       message: "Invalid address syntax: `0`.",
@@ -164,7 +165,7 @@ test("reports concrete POSIX errors without comparing dialects", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("0a", posixDialect), [
+  assert.deepEqual(summariesFor("0a", posixBre), [
     {
       code: "invalid-address",
       message: "Invalid address syntax: `0`.",
@@ -174,7 +175,7 @@ test("reports concrete POSIX errors without comparing dialects", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("{0}", posixDialect), [
+  assert.deepEqual(summariesFor("{0}", posixBre), [
     {
       code: "invalid-address",
       message: "Invalid address syntax: `0`.",
@@ -321,7 +322,7 @@ test("keeps recovery diagnostics on the offending text", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("1,,p\n", gnuDialect), [
+  assert.deepEqual(summariesFor("1,,p\n", gnuBre), [
     {
       code: "missing-address",
       message: "Expected an address after `,`.",
@@ -410,8 +411,85 @@ test("reports regular expression semantic errors", () => {
   assert.deepEqual(summariesFor("s/\\(a\\)\\1/\\1/\ns/[a-z]/x/"), []);
 });
 
+test("validates ERE groups and pattern back-references by dialect", () => {
+  assert.deepEqual(summariesFor("s/(a)\\1/\\1/", gnuEre), []);
+  assert.deepEqual(summariesFor("s/(a)\\1/\\1/", posixEre), [
+    {
+      code: "unsupported-pattern-backreference",
+      message: "Pattern back-references are not supported.",
+      range: {
+        start: { line: 0, character: 5 },
+        end: { line: 0, character: 7 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s(\\(a(x(", gnuEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Expected `)` to close this regular expression group.",
+      range: {
+        start: { line: 0, character: 2 },
+        end: { line: 0, character: 4 },
+      },
+    },
+  ]);
+});
+
+test("tracks nested groups and back-references in GNU BRE and ERE", () => {
+  assert.deepEqual(summariesFor("s/\\(\\(a\\)\\2\\)/\\1/", gnuBre), []);
+  assert.deepEqual(summariesFor("s/((a)\\2)/\\1/", gnuEre), []);
+});
+
+test("keeps inactive group spellings literal and separates cached BRE and ERE trees", () => {
+  assert.deepEqual(summariesFor("s/(a)/\\1/", posixBre), [
+    {
+      code: "invalid-backreference",
+      message: "Back-reference `\\1` has no matching regular expression group.",
+      range: {
+        start: { line: 0, character: 6 },
+        end: { line: 0, character: 8 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/(a)/\\1/", gnuEre), []);
+  assert.deepEqual(summariesFor("s/\\(a\\)/\\1/", gnuEre), [
+    {
+      code: "invalid-backreference",
+      message: "Back-reference `\\1` has no matching regular expression group.",
+      range: {
+        start: { line: 0, character: 8 },
+        end: { line: 0, character: 10 },
+      },
+    },
+  ]);
+});
+
+test("handles unmatched group closes according to the selected syntax", () => {
+  assert.deepEqual(summariesFor("s/a\\)/x/", posixBre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Unexpected `\\)`; no regular expression group is open.",
+      range: {
+        start: { line: 0, character: 3 },
+        end: { line: 0, character: 5 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/a)/x/", posixEre), []);
+  assert.deepEqual(summariesFor("s/a)/x/", gnuEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Unexpected `)`; no regular expression group is open.",
+      range: {
+        start: { line: 0, character: 3 },
+        end: { line: 0, character: 4 },
+      },
+    },
+  ]);
+});
+
 test("reports translation and numeric semantic errors", () => {
-  assert.deepEqual(summariesFor("y/ab/c/", gnuDialect), [
+  assert.deepEqual(summariesFor("y/ab/c/", gnuBre), [
     {
       code: "mismatched-translation-length",
       message:
@@ -432,7 +510,7 @@ test("reports translation and numeric semantic errors", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("1~0p", gnuDialect), [
+  assert.deepEqual(summariesFor("1~0p", gnuBre), [
     {
       code: "invalid-step-value",
       message: "The address step must be greater than zero.",
@@ -446,7 +524,7 @@ test("reports translation and numeric semantic errors", () => {
 });
 
 test("reports missing GNU address and text arguments on concrete characters", () => {
-  assert.deepEqual(summariesFor("0~", gnuDialect), [
+  assert.deepEqual(summariesFor("0~", gnuBre), [
     {
       code: "missing-step-value",
       message: "Expected a step value after `~`.",
@@ -456,7 +534,7 @@ test("reports missing GNU address and text arguments on concrete characters", ()
       },
     },
   ]);
-  assert.deepEqual(summariesFor("1,+p", gnuDialect), [
+  assert.deepEqual(summariesFor("1,+p", gnuBre), [
     {
       code: "missing-line-offset",
       message: "Expected a line offset after `+`.",
@@ -466,7 +544,7 @@ test("reports missing GNU address and text arguments on concrete characters", ()
       },
     },
   ]);
-  assert.deepEqual(summariesFor("1,~p", gnuDialect), [
+  assert.deepEqual(summariesFor("1,~p", gnuBre), [
     {
       code: "missing-step-value",
       message: "Expected a step value after `~`.",
@@ -476,7 +554,7 @@ test("reports missing GNU address and text arguments on concrete characters", ()
       },
     },
   ]);
-  assert.deepEqual(summariesFor("1c", gnuDialect), [
+  assert.deepEqual(summariesFor("1c", gnuBre), [
     {
       code: "missing-text-argument",
       message: "The `c` command requires a text argument.",
@@ -585,7 +663,7 @@ test("uses dialect and command context in recovery messages", () => {
   assert.deepEqual(summariesFor("a text"), posixTextExpected);
   assert.deepEqual(summariesFor("a hello"), posixTextExpected);
 
-  assert.deepEqual(summariesFor("a", gnuDialect), [
+  assert.deepEqual(summariesFor("a", gnuBre), [
     {
       code: "missing-text-argument",
       message: "The `a` command requires a text argument.",
@@ -595,7 +673,7 @@ test("uses dialect and command context in recovery messages", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("p;:", gnuDialect), [
+  assert.deepEqual(summariesFor("p;:", gnuBre), [
     {
       code: "missing-label-argument",
       message: "Expected a label name after `:`.",
@@ -605,7 +683,7 @@ test("uses dialect and command context in recovery messages", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("p;w", gnuDialect), [
+  assert.deepEqual(summariesFor("p;w", gnuBre), [
     {
       code: "missing-file-argument",
       message: "The `w` command requires a file name.",
@@ -638,7 +716,7 @@ test("keeps delimiter and control escape messages readable", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("s/\\c\\/x/", gnuDialect), [
+  assert.deepEqual(summariesFor("s/\\c\\/x/", gnuBre), [
     {
       code: "invalid-control-escape",
       message: "The `\\c` escape must be followed by an unescaped character.",
@@ -662,9 +740,9 @@ test("reports unclosed blocks consistently in both dialects", () => {
     },
   ];
 
-  assert.deepEqual(summariesFor("{p\n", posixDialect), expected);
-  assert.deepEqual(summariesFor("{p\n", gnuDialect), expected);
-  assert.deepEqual(summariesFor("d;}", posixDialect), [
+  assert.deepEqual(summariesFor("{p\n", posixBre), expected);
+  assert.deepEqual(summariesFor("{p\n", gnuBre), expected);
+  assert.deepEqual(summariesFor("d;}", posixBre), [
     {
       code: "unmatched-closing-brace",
       message: "Unexpected `}`; no block is open.",
@@ -727,7 +805,7 @@ test("reports label errors alongside syntax errors", () => {
 });
 
 test("prefers a specific recovery marker over a missing node at the same range", () => {
-  assert.deepEqual(summariesFor("s/a/b\n", gnuDialect), [
+  assert.deepEqual(summariesFor("s/a/b\n", gnuBre), [
     {
       code: "unterminated-replacement",
       message: 'Expected delimiter "/" to close the replacement.',
@@ -780,8 +858,8 @@ test("does not reuse a cached tree after the document changes", () => {
   const invalidDocument = TextDocument.create(uri, "sed", 1, "z\n");
   const validDocument = TextDocument.create(uri, "sed", 2, "p\n");
 
-  assert.equal(createDiagnostics(invalidDocument, posixDialect).length, 1);
-  assert.deepEqual(createDiagnostics(validDocument, posixDialect), []);
+  assert.equal(createDiagnostics(invalidDocument, posixBre).length, 1);
+  assert.deepEqual(createDiagnostics(validDocument, posixBre), []);
 
   invalidateSyntaxTreeCache(validDocument);
 });

@@ -120,9 +120,9 @@ function formatScript(rootNode, source, options) {
   );
 }
 
-export function createFormattingEdits(document, dialect, options) {
+export function createFormattingEdits(document, syntax, options) {
   const source = document.getText();
-  const rootNode = syntaxTreeFor(document, dialect).rootNode;
+  const rootNode = syntaxTreeFor(document, syntax).rootNode;
   if (rootNode.hasError || collectSyntaxIssueNodes(rootNode).length > 0) {
     return [];
   }

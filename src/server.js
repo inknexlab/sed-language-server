@@ -20,12 +20,15 @@ if (process.argv.length === 2) {
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
-const defaultDialect = "posix";
-let activeDialect = defaultDialect;
+const defaultSyntax = {
+  dialect: "posix",
+  regex: "bre",
+};
+let activeSyntax = defaultSyntax;
 
-function resolveDialect(options) {
+function resolveSyntax(options) {
   if (options === undefined || options === null) {
-    return { dialect: defaultDialect };
+    return { syntax: defaultSyntax };
   }
   if (typeof options !== "object" || Array.isArray(options)) {
     return {
@@ -34,33 +37,46 @@ function resolveDialect(options) {
   }
 
   const dialect =
-    options.dialect === undefined ? defaultDialect : options.dialect;
+    options.dialect === undefined ? defaultSyntax.dialect : options.dialect;
   if (dialect !== "posix" && dialect !== "gnu") {
     return {
       error: 'The syntax dialect must be either "posix" or "gnu".',
     };
   }
 
-  return { dialect };
+  const regex =
+    options.regex === undefined ? defaultSyntax.regex : options.regex;
+  if (regex !== "bre" && regex !== "ere") {
+    return {
+      error: 'The regular expression mode must be either "bre" or "ere".',
+    };
+  }
+
+  return {
+    syntax: {
+      dialect,
+      regex,
+    },
+  };
 }
 
 function publishDiagnostics(document) {
   return connection.sendDiagnostics({
     uri: document.uri,
     version: document.version,
-    diagnostics: createDiagnostics(document, activeDialect),
+    diagnostics: createDiagnostics(document, activeSyntax),
   });
 }
 
 connection.onInitialize(({ initializationOptions }) => {
-  const result = resolveDialect(initializationOptions);
+  const result = resolveSyntax(initializationOptions);
   if (result.error !== undefined) {
     return new ResponseError(ErrorCodes.InvalidParams, result.error, {
       retry: false,
     });
   }
 
-  activeDialect = result.dialect;
+  activeSyntax = result.syntax;
   return {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
@@ -74,14 +90,14 @@ connection.onDefinition(({ textDocument, position }) => {
   const document = documents.get(textDocument.uri);
   return document === undefined
     ? null
-    : createDefinitionLocations(document, position, activeDialect);
+    : createDefinitionLocations(document, position, activeSyntax);
 });
 
 connection.onDocumentFormatting(({ textDocument, options }) => {
   const document = documents.get(textDocument.uri);
   return document === undefined
     ? []
-    : createFormattingEdits(document, activeDialect, options);
+    : createFormattingEdits(document, activeSyntax, options);
 });
 
 documents.onDidChangeContent(({ document }) => {

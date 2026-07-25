@@ -1,0 +1,50 @@
+{
+  "name": "@inknexlab/sed-language-server",
+  "version": "0.1.0",
+  "description": "Language server for POSIX sed with opt-in GNU syntax support.",
+  "keywords": [
+    "sed",
+    "language-server",
+    "lsp"
+  ],
+  "type": "module",
+  "files": [
+    "src",
+    "vendor"
+  ],
+  "bin": {
+    "sed-language-server": "src/server.js"
+  },
+  "scripts": {
+    "build:grammar": "node scripts/build-tree-sitter-sed-wasm.js",
+    "check": "biome check .",
+    "check:write": "biome check --write .",
+    "prepublishOnly": "npm run check && npm test",
+    "start": "node src/server.js --stdio",
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inknexlab/sed-language-server.git"
+  },
+  "homepage": "https://github.com/inknexlab/sed-language-server#readme",
+  "bugs": {
+    "url": "https://github.com/inknexlab/sed-language-server/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "vscode-languageserver": "10.1.0",
+    "vscode-languageserver-textdocument": "1.0.12",
+    "web-tree-sitter": "0.26.11"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.5",
+    "tree-sitter-cli": "0.26.11"
+  }
+}

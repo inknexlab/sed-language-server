@@ -152,3 +152,27 @@ test("keeps a separator when formatting an empty block", () => {
     ],
   );
 });
+
+test("formats a compact GNU label before a closing brace", () => {
+  assert.deepEqual(
+    createFormattingEdits(documentFor("{:target}\n"), gnuBre, spaces),
+    [
+      {
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 1, character: 0 },
+        },
+        newText: "{\n  :target\n}\n",
+      },
+    ],
+  );
+});
+
+test("declines excessively nested blocks without overflowing", () => {
+  const source = `${"{".repeat(2000)}p${"}".repeat(2000)}`;
+
+  assert.deepEqual(
+    createFormattingEdits(documentFor(source), gnuBre, spaces),
+    [],
+  );
+});

@@ -12,6 +12,8 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { createDefinitionLocations } from "./definition.js";
 import { createDiagnostics } from "./diagnostics.js";
 import { createFormattingEdits } from "./formatting.js";
+import { createReferenceLocations } from "./references.js";
+import { createRenameWorkspaceEdit, prepareLabelRename } from "./rename.js";
 import { invalidateSyntaxTreeCache } from "./syntax.js";
 
 if (process.argv.length === 2) {
@@ -82,6 +84,10 @@ connection.onInitialize(({ initializationOptions }) => {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       definitionProvider: true,
       documentFormattingProvider: true,
+      referencesProvider: true,
+      renameProvider: {
+        prepareProvider: true,
+      },
     },
   };
 });
@@ -91,6 +97,27 @@ connection.onDefinition(({ textDocument, position }) => {
   return document === undefined
     ? null
     : createDefinitionLocations(document, position, activeSyntax);
+});
+
+connection.onReferences(({ textDocument, position, context }) => {
+  const document = documents.get(textDocument.uri);
+  return document === undefined
+    ? null
+    : createReferenceLocations(document, position, activeSyntax, context);
+});
+
+connection.onPrepareRename(({ textDocument, position }) => {
+  const document = documents.get(textDocument.uri);
+  return document === undefined
+    ? null
+    : prepareLabelRename(document, position, activeSyntax);
+});
+
+connection.onRenameRequest(({ textDocument, position, newName }) => {
+  const document = documents.get(textDocument.uri);
+  return document === undefined
+    ? null
+    : createRenameWorkspaceEdit(document, position, activeSyntax, newName);
 });
 
 connection.onDocumentFormatting(({ textDocument, options }) => {

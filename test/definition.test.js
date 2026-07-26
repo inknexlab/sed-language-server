@@ -58,6 +58,10 @@ test("uses the selected grammar and only resolves label-reference positions", ()
     null,
   );
   assert.equal(
+    createDefinitionLocations(document, { line: 0, character: 3 }, gnuBre),
+    null,
+  );
+  assert.equal(
     createDefinitionLocations(
       documentFor(":target\nb missing\n"),
       { line: 1, character: 4 },
@@ -99,6 +103,36 @@ test("returns UTF-16 definition ranges across CRLF lines", () => {
         range: {
           start: { line: 0, character: 1 },
           end: { line: 0, character: 3 },
+        },
+      },
+    ],
+  );
+});
+
+test("resolves GNU labels before comments and closing braces", () => {
+  const commented = documentFor(":target # definition\nb target # reference\n");
+  assert.deepEqual(
+    createDefinitionLocations(commented, { line: 1, character: 4 }, gnuBre),
+    [
+      {
+        uri: commented.uri,
+        range: {
+          start: { line: 0, character: 1 },
+          end: { line: 0, character: 7 },
+        },
+      },
+    ],
+  );
+
+  const compactBlock = documentFor("{:target;b target}");
+  assert.deepEqual(
+    createDefinitionLocations(compactBlock, { line: 0, character: 12 }, gnuBre),
+    [
+      {
+        uri: compactBlock.uri,
+        range: {
+          start: { line: 0, character: 2 },
+          end: { line: 0, character: 8 },
         },
       },
     ],

@@ -93,6 +93,27 @@ test("enforces command address limits", () => {
   assert.deepEqual(summariesFor("1,2c\\\ntext"), []);
   assert.deepEqual(summariesFor("1,2a text", gnuBre), []);
   assert.deepEqual(summariesFor("1,2r file", gnuBre), []);
+  assert.deepEqual(summariesFor("# comment"), []);
+  assert.deepEqual(summariesFor("1# comment"), [
+    {
+      code: "too-many-addresses",
+      message: "The `#` command does not accept an address.",
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 1 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("1# comment", gnuBre), [
+    {
+      code: "too-many-addresses",
+      message: "The `#` command does not accept an address.",
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 1 },
+      },
+    },
+  ]);
 });
 
 test("accepts GNU zero addresses only in their defined contexts", () => {
@@ -110,6 +131,7 @@ test("accepts GNU zero addresses only in their defined contexts", () => {
   assert.deepEqual(summariesFor("0p", gnuBre), expected);
   assert.deepEqual(summariesFor("0,2p", gnuBre), expected);
   assert.deepEqual(summariesFor("0,/value/p", gnuBre), []);
+  assert.deepEqual(summariesFor("0,\\%value%p", gnuBre), []);
   assert.deepEqual(summariesFor("0r file", gnuBre), []);
   assert.deepEqual(summariesFor("0~2p", gnuBre), []);
 });
@@ -386,16 +408,7 @@ test("reports regular expression semantic errors", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("s/[z-a]/x/"), [
-    {
-      code: "invalid-regular-expression",
-      message: "Invalid character range: `z-a`.",
-      range: {
-        start: { line: 0, character: 3 },
-        end: { line: 0, character: 6 },
-      },
-    },
-  ]);
+  assert.deepEqual(summariesFor("s/[z-a]/x/"), []);
   assert.deepEqual(summariesFor("s//x/"), [
     {
       code: "missing-previous-regular-expression",
@@ -409,6 +422,170 @@ test("reports regular expression semantic errors", () => {
   ]);
   assert.deepEqual(summariesFor("/a/p\ns//x/"), []);
   assert.deepEqual(summariesFor("s/\\(a\\)\\1/\\1/\ns/[a-z]/x/"), []);
+});
+
+test("reports invalid quantifiers, intervals, and POSIX character classes", () => {
+  assert.deepEqual(summariesFor("s/*a/x/", posixBre), []);
+  assert.deepEqual(summariesFor("s/*a/x/", posixEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Regular expression operator `*` has no preceding expression.",
+      range: {
+        start: { line: 0, character: 2 },
+        end: { line: 0, character: 3 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/*a/x/", gnuBre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Regular expression operator `*` has no preceding expression.",
+      range: {
+        start: { line: 0, character: 2 },
+        end: { line: 0, character: 3 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/a{word}/x/", posixEre), []);
+  assert.deepEqual(summariesFor("s/😀**/x/", posixEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Regular expression operator `*` has no preceding expression.",
+      range: {
+        start: { line: 0, character: 5 },
+        end: { line: 0, character: 6 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/a{2,1}/x/", posixEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Invalid regular expression interval: `{2,1}`.",
+      range: {
+        start: { line: 0, character: 3 },
+        end: { line: 0, character: 8 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/a{256}/x/", posixEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Invalid regular expression interval: `{256}`.",
+      range: {
+        start: { line: 0, character: 3 },
+        end: { line: 0, character: 8 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/a\\{255\\}/x/", posixBre), []);
+  assert.deepEqual(summariesFor("s/a\\{256\\}/x/", posixBre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Invalid regular expression interval: `\\{256\\}`.",
+      range: {
+        start: { line: 0, character: 3 },
+        end: { line: 0, character: 10 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/a{32767}/x/", gnuEre), []);
+  assert.deepEqual(summariesFor("s/a{32768}/x/", gnuEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Invalid regular expression interval: `{32768}`.",
+      range: {
+        start: { line: 0, character: 3 },
+        end: { line: 0, character: 10 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/[[:bogus:]]/x/", posixEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Unknown POSIX character class: `[:bogus:]`.",
+      range: {
+        start: { line: 0, character: 3 },
+        end: { line: 0, character: 12 },
+      },
+    },
+  ]);
+});
+
+test("tracks escaped regular expression addresses in regex history and validation", () => {
+  assert.deepEqual(summariesFor("\\%%p", gnuBre), [
+    {
+      code: "missing-previous-regular-expression",
+      message:
+        "An empty regular expression requires a previous regular expression.",
+      range: {
+        start: { line: 0, character: 1 },
+        end: { line: 0, character: 3 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("\\%value%p\ns//x/", gnuBre), []);
+  assert.deepEqual(summariesFor("\\%*a%p", gnuEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Regular expression operator `*` has no preceding expression.",
+      range: {
+        start: { line: 0, character: 2 },
+        end: { line: 0, character: 3 },
+      },
+    },
+  ]);
+});
+
+test("applies GNU escapes before analyzing regular expression syntax", () => {
+  assert.deepEqual(summariesFor("s/\\x28a\\x29/\\1/", gnuEre), []);
+  assert.deepEqual(summariesFor("s/\\x5c\\x28a\\x5c\\x29/\\1/", gnuBre), []);
+  assert.deepEqual(summariesFor("s/\\x29/x/", gnuEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Unexpected `\\x29`; no regular expression group is open.",
+      range: {
+        start: { line: 0, character: 2 },
+        end: { line: 0, character: 6 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/a\\c;2,1}/x/", gnuEre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Invalid regular expression interval: `\\c;2,1}`.",
+      range: {
+        start: { line: 0, character: 3 },
+        end: { line: 0, character: 10 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/\\x5babc/x/", gnuEre), [
+    {
+      code: "unclosed-bracket-expression",
+      message: "Expected `]` to close this bracket expression.",
+      range: {
+        start: { line: 0, character: 2 },
+        end: { line: 0, character: 9 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/\\x5c/x/", gnuBre), [
+    {
+      code: "incomplete-escape",
+      message: "Expected a character after `\\`.",
+      range: {
+        start: { line: 0, character: 2 },
+        end: { line: 0, character: 6 },
+      },
+    },
+  ]);
+});
+
+test("decodes escaped numeric delimiters in GNU regular expressions", () => {
+  assert.deepEqual(summariesFor("s4\\x\\44x4", gnuBre), []);
+  assert.deepEqual(summariesFor("s8\\x2\\8a\\x298\\18", gnuEre), []);
+  assert.deepEqual(summariesFor("s0\\d4\\0a\\d410\\10", gnuEre), []);
+  assert.deepEqual(summariesFor("s0\\o5\\0a\\o510\\10", gnuEre), []);
 });
 
 test("validates ERE groups and pattern back-references by dialect", () => {
@@ -510,17 +687,80 @@ test("reports translation and numeric semantic errors", () => {
       },
     },
   ]);
-  assert.deepEqual(summariesFor("1~0p", gnuBre), [
+  assert.deepEqual(summariesFor("50~0p", gnuBre), []);
+  assert.deepEqual(summariesFor("1,~0p", gnuBre), []);
+  assert.deepEqual(summariesFor("0~0p", gnuBre), [
     {
-      code: "invalid-step-value",
-      message: "The address step must be greater than zero.",
+      code: "invalid-address",
+      message: "Address `0` is only valid in `0,/RE/`, `0r file`, or `0~N`.",
       range: {
-        start: { line: 0, character: 2 },
-        end: { line: 0, character: 3 },
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 1 },
       },
     },
   ]);
   assert.deepEqual(summariesFor("y/\\n/x/"), []);
+  assert.deepEqual(summariesFor("y/\\x41/B/", gnuBre), []);
+  assert.deepEqual(summariesFor("y/\\o101/B/", gnuBre), []);
+  assert.deepEqual(summariesFor("y/\\d065/B/", gnuBre), []);
+  assert.deepEqual(summariesFor("y/\\cA/B/", gnuBre), []);
+});
+
+test("rejects GNU substitution flags that may only occur once", () => {
+  assert.deepEqual(summariesFor("s/a/b/gg", gnuBre), [
+    {
+      code: "invalid-substitution-flag",
+      message: "The `g` substitution flag may only be specified once.",
+      range: {
+        start: { line: 0, character: 7 },
+        end: { line: 0, character: 8 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/a/b/pp", gnuBre), [
+    {
+      code: "invalid-substitution-flag",
+      message: "The `p` substitution flag may only be specified once.",
+      range: {
+        start: { line: 0, character: 7 },
+        end: { line: 0, character: 8 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/a/b/1 2", gnuBre), [
+    {
+      code: "invalid-substitution-flag",
+      message: "A substitution occurrence may only be specified once.",
+      range: {
+        start: { line: 0, character: 8 },
+        end: { line: 0, character: 9 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("s/a/b/iIimMmee", gnuBre), []);
+});
+
+test("rejects GNU regex modifiers on an empty reused pattern", () => {
+  assert.deepEqual(summariesFor("/a/p\ns//x/I", gnuBre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Modifier `I` cannot be used with an empty regular expression.",
+      range: {
+        start: { line: 1, character: 5 },
+        end: { line: 1, character: 6 },
+      },
+    },
+  ]);
+  assert.deepEqual(summariesFor("/a/p\n//Mp", gnuBre), [
+    {
+      code: "invalid-regular-expression",
+      message: "Modifier `M` cannot be used with an empty regular expression.",
+      range: {
+        start: { line: 1, character: 2 },
+        end: { line: 1, character: 3 },
+      },
+    },
+  ]);
 });
 
 test("reports missing GNU address and text arguments on concrete characters", () => {
@@ -755,24 +995,38 @@ test("reports unclosed blocks consistently in both dialects", () => {
 });
 
 test("reports duplicate and undefined labels", () => {
-  assert.deepEqual(summariesFor(":known\n:known\nb missing\n"), [
+  assert.deepEqual(diagnosticsFor(":known\n:known\nb missing\n"), [
     {
+      severity: DiagnosticSeverity.Error,
       code: "duplicate-label",
       message: "Duplicate sed label: `known`.",
       range: {
         start: { line: 1, character: 1 },
         end: { line: 1, character: 6 },
       },
+      source: "sed-language-server",
     },
     {
+      severity: DiagnosticSeverity.Warning,
       code: "undefined-label",
-      message: "Undefined sed label: `missing`.",
+      message:
+        "No definition for sed label `missing` was found in this document.",
       range: {
         start: { line: 2, character: 2 },
         end: { line: 2, character: 9 },
       },
+      source: "sed-language-server",
     },
   ]);
+  assert.deepEqual(summariesFor(":known\n:known\n", gnuBre), []);
+});
+
+test("uses GNU comment and block boundaries for labels", () => {
+  assert.deepEqual(
+    summariesFor(":known # definition\nb known # reference\n", gnuBre),
+    [],
+  );
+  assert.deepEqual(summariesFor("{:known}", gnuBre), []);
 });
 
 test("reports label errors alongside syntax errors", () => {
@@ -787,7 +1041,8 @@ test("reports label errors alongside syntax errors", () => {
     },
     {
       code: "undefined-label",
-      message: "Undefined sed label: `missing`.",
+      message:
+        "No definition for sed label `missing` was found in this document.",
       range: {
         start: { line: 2, character: 2 },
         end: { line: 2, character: 9 },
@@ -862,4 +1117,10 @@ test("does not reuse a cached tree after the document changes", () => {
   assert.deepEqual(createDiagnostics(validDocument, posixBre), []);
 
   invalidateSyntaxTreeCache(validDocument);
+});
+
+test("normalizes many adjacent recovery issues without quadratic work", {
+  timeout: 2000,
+}, () => {
+  assert.equal(diagnosticsFor("s/a\n".repeat(4000)).length, 4000);
 });

@@ -1,5 +1,7 @@
 import { collectSyntaxIssueNodes, syntaxTreeFor } from "./syntax.js";
 
+const maximumFormattingBlockDepth = 256;
+
 function lineEndingCount(source) {
   return source.match(/\r\n|\n/g)?.length ?? 0;
 }
@@ -98,6 +100,26 @@ function indentationFor(options) {
   return options.insertSpaces ? " ".repeat(options.tabSize) : "\t";
 }
 
+function hasExcessiveBlockNesting(rootNode) {
+  const stack = [{ node: rootNode, depth: 0 }];
+
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop();
+    const childDepth = depth + (node.type === "block_command" ? 1 : 0);
+    if (childDepth > maximumFormattingBlockDepth) {
+      return true;
+    }
+    for (let index = 0; index < node.namedChildCount; index += 1) {
+      const child = node.namedChild(index);
+      if (child !== null) {
+        stack.push({ node: child, depth: childDepth });
+      }
+    }
+  }
+
+  return false;
+}
+
 function formatScript(rootNode, source, options) {
   const lineEnding = source.match(/\r\n|\n/)?.[0] ?? "\n";
   const indentation = indentationFor(options);
@@ -123,7 +145,11 @@ function formatScript(rootNode, source, options) {
 export function createFormattingEdits(document, syntax, options) {
   const source = document.getText();
   const rootNode = syntaxTreeFor(document, syntax).rootNode;
-  if (rootNode.hasError || collectSyntaxIssueNodes(rootNode).length > 0) {
+  if (
+    rootNode.hasError ||
+    hasExcessiveBlockNesting(rootNode) ||
+    collectSyntaxIssueNodes(rootNode).length > 0
+  ) {
     return [];
   }
 

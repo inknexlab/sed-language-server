@@ -178,7 +178,7 @@ async function shutdown(client) {
   });
 }
 
-test("serves diagnostics, definitions, and formatting through the LSP document lifecycle", async (t) => {
+test("serves diagnostics, label navigation, and formatting through the LSP document lifecycle", async (t) => {
   const client = new LspClient();
   t.after(() => client.dispose());
 
@@ -187,6 +187,10 @@ test("serves diagnostics, definitions, and formatting through the LSP document l
     textDocumentSync: TextDocumentSyncKind.Incremental,
     definitionProvider: true,
     documentFormattingProvider: true,
+    referencesProvider: true,
+    renameProvider: {
+      prepareProvider: true,
+    },
   });
 
   const uri = "file:///integration.sed";
@@ -230,6 +234,71 @@ test("serves diagnostics, definitions, and formatting through the LSP document l
         },
       },
     ],
+  );
+
+  assert.deepEqual(
+    await client.request("textDocument/references", {
+      textDocument: { uri },
+      position: { line: 2, character: 4 },
+      context: {
+        includeDeclaration: true,
+      },
+    }),
+    [
+      {
+        uri,
+        range: {
+          start: { line: 0, character: 1 },
+          end: { line: 0, character: 5 },
+        },
+      },
+      {
+        uri,
+        range: {
+          start: { line: 2, character: 2 },
+          end: { line: 2, character: 6 },
+        },
+      },
+    ],
+  );
+
+  assert.deepEqual(
+    await client.request("textDocument/prepareRename", {
+      textDocument: { uri },
+      position: { line: 0, character: 3 },
+    }),
+    {
+      start: { line: 0, character: 1 },
+      end: { line: 0, character: 5 },
+    },
+  );
+
+  assert.deepEqual(
+    await client.request("textDocument/rename", {
+      textDocument: { uri },
+      position: { line: 2, character: 4 },
+      newName: "again",
+    }),
+    {
+      changes: {
+        [uri]: [
+          {
+            range: {
+              start: { line: 0, character: 1 },
+              end: { line: 0, character: 5 },
+            },
+            newText: "again",
+          },
+          {
+            range: {
+              start: { line: 2, character: 2 },
+              end: { line: 2, character: 6 },
+            },
+            newText: "again",
+          },
+        ],
+      },
+    },
   );
 
   await client.notify("textDocument/didChange", {

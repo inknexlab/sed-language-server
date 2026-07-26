@@ -1,38 +1,21 @@
-import { rangeForNode, syntaxTreeFor } from "./syntax.js";
-
-function labelReferenceAt(rootNode, offset) {
-  let node = rootNode.namedDescendantForIndex(offset);
-  while (node !== null) {
-    if (
-      node.type === "label_reference" &&
-      node.startIndex <= offset &&
-      offset < node.endIndex
-    ) {
-      return node;
-    }
-    node = node.parent;
-  }
-  return undefined;
-}
+import { labelAtPosition, matchingLabels } from "./labels.js";
+import { rangeForNode } from "./syntax.js";
 
 export function createDefinitionLocations(document, position, syntax) {
-  const rootNode = syntaxTreeFor(document, syntax).rootNode;
-  const offset = document.offsetAt(position);
-  const reference =
-    labelReferenceAt(rootNode, offset) ??
-    (offset === 0 ? undefined : labelReferenceAt(rootNode, offset - 1));
+  const label = labelAtPosition(document, position, syntax);
 
-  if (reference === undefined) {
+  if (label === undefined || label.node.type !== "label_reference") {
     return null;
   }
 
-  const locations = rootNode
-    .descendantsOfType("label_definition")
-    .filter((definition) => definition.text === reference.text)
-    .map((definition) => ({
-      uri: document.uri,
-      range: rangeForNode(document, definition),
-    }));
+  const locations = matchingLabels(
+    label.rootNode,
+    label.node,
+    "label_definition",
+  ).map((node) => ({
+    uri: document.uri,
+    range: rangeForNode(document, node),
+  }));
 
   return locations.length === 0 ? null : locations;
 }

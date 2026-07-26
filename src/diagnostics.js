@@ -29,6 +29,7 @@ const missingValueIssueByOperator = {
 };
 const maximumAddressesByDialect = {
   posix: {
+    "#": 0,
     ":": 0,
     "=": 1,
     a: 1,
@@ -37,6 +38,7 @@ const maximumAddressesByDialect = {
     r: 1,
   },
   gnu: {
+    "#": 0,
     ":": 0,
     Q: 1,
     q: 1,
@@ -44,11 +46,11 @@ const maximumAddressesByDialect = {
 };
 const diagnosticNodeTypes = [
   "command",
+  "escaped_regex_address",
   "label_definition",
   "label_reference",
   "occurrence_flag",
   "regex_address",
-  "step_value",
   "substitute_argument",
   "translate_argument",
 ];
@@ -83,14 +85,26 @@ const issueDescriptions = {
     code: "invalid-backreference",
     message: `Back-reference \`${node.text}\` has no matching regular expression group.`,
   }),
+  invalid_empty_regex_modifier: (node) => ({
+    code: "invalid-regular-expression",
+    message: `Modifier \`${node.text}\` cannot be used with an empty regular expression.`,
+  }),
+  invalid_posix_character_class: (node) => ({
+    code: "invalid-regular-expression",
+    message: `Unknown POSIX character class: \`${node.text}\`.`,
+  }),
+  invalid_regex_interval: (node) => ({
+    code: "invalid-regular-expression",
+    message: `Invalid regular expression interval: \`${node.text}\`.`,
+  }),
+  invalid_regex_quantifier: (node) => ({
+    code: "invalid-regular-expression",
+    message: `Regular expression operator \`${node.text}\` has no preceding expression.`,
+  }),
   unsupported_pattern_backreference: {
     code: "unsupported-pattern-backreference",
     message: "Pattern back-references are not supported.",
   },
-  invalid_character_range: (node) => ({
-    code: "invalid-regular-expression",
-    message: `Invalid character range: \`${node.text}\`.`,
-  }),
   unclosed_bracket: {
     code: "unclosed-bracket-expression",
     message: "Expected `]` to close this bracket expression.",
@@ -131,6 +145,13 @@ const issueDescriptions = {
     code: "invalid-substitution-occurrence",
     message: "The substitution occurrence must be greater than zero.",
   },
+  duplicate_substitution_flag: (node) => ({
+    code: "invalid-substitution-flag",
+    message:
+      node.details.kind === "occurrence"
+        ? "A substitution occurrence may only be specified once."
+        : `The \`${node.text}\` substitution flag may only be specified once.`,
+  }),
   invalid_zero_address: {
     code: "invalid-address",
     message: "Address `0` is only valid in `0,/RE/`, `0r file`, or `0~N`.",
@@ -461,7 +482,13 @@ function enclosingError(node) {
 }
 
 function firstCommandName(node) {
-  return node.children.find((child) => child.type === "command_name");
+  for (let index = 0; index < node.childCount; index += 1) {
+    const child = node.child(index);
+    if (child?.type === "command_name") {
+      return child;
+    }
+  }
+  return undefined;
 }
 
 function enclosingOpeningBrace(node) {
@@ -651,6 +678,7 @@ function contextualizeIssue(node, dialect) {
     if (negation !== undefined) {
       return issueAt(node, "missing_command", negation, { after: "`!`" });
     }
+    const parsedPrefix = node.children[0];
     const addressOperator = node.children.find(
       (child) => child.type === "address_operator",
     );
@@ -663,6 +691,13 @@ function contextualizeIssue(node, dialect) {
         next?.startIndex === node.endIndex &&
         /^0+$/.test(next.text)
       ) {
+        if (
+          dialect === "gnu" &&
+          parsedPrefix?.type === "line_number_address" &&
+          /^0+$/.test(parsedPrefix.text)
+        ) {
+          return issueAt(parsedPrefix, "invalid_zero_address");
+        }
         return issueAt(node, "invalid_step_value", next);
       }
       const target =
@@ -672,7 +707,6 @@ function contextualizeIssue(node, dialect) {
           : addressOperator;
       return issueAt(node, missingValueIssue, target);
     }
-    const parsedPrefix = node.children[0];
     if (
       parsedPrefix?.type === "address" ||
       parsedPrefix?.type === "address_range" ||
@@ -706,21 +740,42 @@ function recoveryContainer(node) {
   return undefined;
 }
 
-function isDerivedIncompleteIssue(node, nodes) {
+function recoveryContainerKey(node) {
+  const container = recoveryContainer(node);
+  return container === undefined
+    ? undefined
+    : `${container.startIndex}:${container.endIndex}`;
+}
+
+function incompleteRecoveryContainerKeys(nodes) {
+  const keys = new Set();
+
+  for (const node of nodes) {
+    if (
+      node.type !== "incomplete_escape" &&
+      node.type !== "invalid_control_escape" &&
+      node.type !== "unclosed_bracket"
+    ) {
+      continue;
+    }
+    const key = recoveryContainerKey(node);
+    if (key !== undefined) {
+      keys.add(key);
+    }
+  }
+
+  return keys;
+}
+
+function isDerivedIncompleteIssue(node, recoveryContainerKeys) {
   if (
     !unterminatedIssueTypes.has(node.type) &&
     !(node.isMissing && node.type === "delimiter")
   ) {
     return false;
   }
-  const container = recoveryContainer(node);
-  return nodes.some(
-    (candidate) =>
-      (candidate.type === "incomplete_escape" ||
-        candidate.type === "invalid_control_escape" ||
-        candidate.type === "unclosed_bracket") &&
-      sameRange(recoveryContainer(candidate), container),
-  );
+  const key = recoveryContainerKey(node);
+  return key !== undefined && recoveryContainerKeys.has(key);
 }
 
 function suppressDerivedIssues(nodes, source) {
@@ -833,10 +888,11 @@ function expandEmptyIssueRange(node) {
 }
 
 function normalizeIssues(nodes, dialect, source) {
+  const recoveryContainerKeys = incompleteRecoveryContainerKeys(nodes);
   const primaryNodes = nodes.filter(
     (node) =>
       !isRecoveryTextAfterInvalidCommand(node) &&
-      !isDerivedIncompleteIssue(node, nodes),
+      !isDerivedIncompleteIssue(node, recoveryContainerKeys),
   );
   const contextualized = collapseInvalidFlags(
     preferSpecificIssues(primaryNodes),
@@ -889,8 +945,9 @@ function isValidGnuZeroAddress(zero, addresses, commandName) {
   if (
     range?.type === "address_range" &&
     sameRange(range.childForFieldName("start"), address) &&
-    range.childForFieldName("end")?.descendantsOfType("regex_address").length >
-      0
+    range
+      .childForFieldName("end")
+      ?.descendantsOfType(["regex_address", "escaped_regex_address"]).length > 0
   ) {
     return true;
   }
@@ -952,104 +1009,538 @@ function addressIssueNodes(commands, source, dialect) {
   return issues;
 }
 
-function singleAsciiCharacter(text) {
-  const characters = [...text];
-  if (characters.length !== 1 || characters[0].codePointAt(0) > 0x7f) {
-    return undefined;
+const posixCharacterClasses = new Set([
+  "alnum",
+  "alpha",
+  "blank",
+  "cntrl",
+  "digit",
+  "graph",
+  "lower",
+  "print",
+  "punct",
+  "space",
+  "upper",
+  "xdigit",
+]);
+const gnuNumericEscapeFormats = {
+  d: {
+    base: 10,
+    digitPattern: /^[0-9]$/,
+    maximumDigits: 3,
+  },
+  o: {
+    base: 8,
+    digitPattern: /^[0-7]$/,
+    maximumDigits: 3,
+  },
+  x: {
+    base: 16,
+    digitPattern: /^[0-9a-fA-F]$/,
+    maximumDigits: 2,
+  },
+};
+
+function appendRegexUnits(units, text, startIndex) {
+  let offset = startIndex;
+
+  for (const value of text) {
+    units.push({
+      value,
+      startIndex: offset,
+      endIndex: offset + value.length,
+    });
+    offset += value.length;
   }
-  return characters[0];
 }
 
-function bracketRangeIssueNodes(regex) {
+function decodedGnuRegexEscape(node) {
+  const kind = node.text[1];
+  const valueText = node.text.slice(2);
+  const numericFormat = gnuNumericEscapeFormats[kind];
+
+  if (numericFormat !== undefined) {
+    const digits = valueText.replaceAll("\\", "");
+    return String.fromCodePoint(Number.parseInt(digits, numericFormat.base));
+  }
+  if (kind === "c") {
+    const codePoint = valueText.codePointAt(0);
+    const upperCodePoint =
+      codePoint >= 0x61 && codePoint <= 0x7a ? codePoint - 0x20 : codePoint;
+    return String.fromCodePoint(upperCodePoint ^ 0x40);
+  }
+
+  return (
+    {
+      a: "\u0007",
+      f: "\f",
+      n: "\n",
+      r: "\r",
+      t: "\t",
+      v: "\v",
+    }[kind] ?? valueText
+  );
+}
+
+function semanticRegexUnits(regex, syntax) {
+  const units = [];
+  const transformedNodeTypes = ["escaped_delimiter"];
+  if (syntax.dialect === "gnu") {
+    transformedNodeTypes.push("gnu_character_escape", "gnu_control_escape");
+  }
+  if (syntax.regex === "ere") {
+    transformedNodeTypes.push("regex_group_open", "regex_group_close");
+  }
+  const transformedNodes = regex
+    .descendantsOfType(transformedNodeTypes)
+    .filter(
+      (node) =>
+        node.type === "escaped_delimiter" ||
+        node.type.startsWith("gnu_") ||
+        node.text.startsWith("\\"),
+    )
+    .sort(compareIssueRanges);
+  let cursor = regex.startIndex;
+
+  for (const node of transformedNodes) {
+    if (node.startIndex < cursor) {
+      continue;
+    }
+    appendRegexUnits(
+      units,
+      regex.text.slice(
+        cursor - regex.startIndex,
+        node.startIndex - regex.startIndex,
+      ),
+      cursor,
+    );
+    if (
+      node.type === "escaped_delimiter" ||
+      node.type === "regex_group_open" ||
+      node.type === "regex_group_close"
+    ) {
+      appendRegexUnits(units, node.text.slice(1), node.startIndex);
+      units.at(-1).endIndex = node.endIndex;
+    } else {
+      appendRegexUnits(units, decodedGnuRegexEscape(node), node.startIndex);
+      units.at(-1).endIndex = node.endIndex;
+    }
+    cursor = node.endIndex;
+  }
+
+  appendRegexUnits(units, regex.text.slice(cursor - regex.startIndex), cursor);
+  return units;
+}
+
+function issueForRegexUnits(
+  regex,
+  units,
+  type,
+  startUnitIndex,
+  endUnitIndex,
+  details,
+) {
+  const start = units[startUnitIndex];
+  const end = units[endUnitIndex];
+  return {
+    type,
+    text: regex.text.slice(
+      start.startIndex - regex.startIndex,
+      end.endIndex - regex.startIndex,
+    ),
+    isMissing: false,
+    startIndex: start.startIndex,
+    endIndex: end.endIndex,
+    details,
+  };
+}
+
+function posixClassEnd(units, startIndex) {
+  if (
+    units[startIndex]?.value !== "[" ||
+    units[startIndex + 1]?.value !== ":"
+  ) {
+    return undefined;
+  }
+
+  for (let index = startIndex + 2; index + 1 < units.length; index += 1) {
+    if (units[index].value === ":" && units[index + 1].value === "]") {
+      return index + 1;
+    }
+    if (!/^[a-zA-Z0-9_]$/.test(units[index].value)) {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function bracketAnalysis(regex, units, startIndex, syntax) {
   const issues = [];
+  let index = startIndex + 1;
 
-  for (const bracket of regex.descendantsOfType("bracket_expression")) {
-    const parts = bracket.namedChildren;
-    for (let index = 1; index < parts.length - 1; index += 1) {
-      const hyphen = parts[index];
-      const start = parts[index - 1];
-      const end = parts[index + 1];
-      if (
-        hyphen.type !== "regex_literal" ||
-        hyphen.text !== "-" ||
-        start.type !== "regex_literal" ||
-        end.type !== "regex_literal"
-      ) {
-        continue;
-      }
+  if (units[index]?.value === "^") {
+    index += 1;
+  }
+  if (units[index]?.value === "]") {
+    index += 1;
+  }
 
-      const startCharacter = singleAsciiCharacter(start.text);
-      const endCharacter = singleAsciiCharacter(end.text);
-      if (
-        startCharacter !== undefined &&
-        endCharacter !== undefined &&
-        startCharacter.codePointAt(0) > endCharacter.codePointAt(0)
-      ) {
+  while (index < units.length) {
+    const classEnd = posixClassEnd(units, index);
+    if (classEnd !== undefined) {
+      const className = units
+        .slice(index + 2, classEnd - 1)
+        .map((unit) => unit.value)
+        .join("");
+      if (!posixCharacterClasses.has(className)) {
         issues.push(
-          issueRange(
-            "invalid_character_range",
-            start,
-            end,
-            `${start.text}-${end.text}`,
+          issueForRegexUnits(
+            regex,
+            units,
+            "invalid_posix_character_class",
+            index,
+            classEnd,
           ),
         );
       }
+      index = classEnd + 1;
+      continue;
+    }
+
+    if (
+      syntax.dialect === "gnu" &&
+      units[index].value === "\\" &&
+      index + 1 < units.length
+    ) {
+      index += 2;
+      continue;
+    }
+    if (units[index].value === "]") {
+      return { issues, endIndex: index };
+    }
+    index += 1;
+  }
+
+  issues.push(
+    issueForRegexUnits(
+      regex,
+      units,
+      "unclosed_bracket",
+      startIndex,
+      units.length - 1,
+    ),
+  );
+  return { issues, endIndex: units.length - 1 };
+}
+
+function intervalAt(units, startIndex, syntax) {
+  const isBre = syntax.regex === "bre";
+  if (isBre) {
+    if (
+      units[startIndex]?.value !== "\\" ||
+      units[startIndex + 1]?.value !== "{"
+    ) {
+      return undefined;
+    }
+  } else if (units[startIndex]?.value !== "{") {
+    return undefined;
+  }
+
+  const contentStart = startIndex + (isBre ? 2 : 1);
+  if (!/^[0-9]$/.test(units[contentStart]?.value ?? "")) {
+    return isBre
+      ? {
+          endIndex: startIndex + 1,
+          valid: false,
+        }
+      : undefined;
+  }
+  let contentEnd;
+  let endIndex;
+  for (let index = contentStart; index < units.length; index += 1) {
+    if (
+      isBre &&
+      units[index].value === "\\" &&
+      units[index + 1]?.value === "}"
+    ) {
+      contentEnd = index;
+      endIndex = index + 1;
+      break;
+    }
+    if (!isBre && units[index].value === "}") {
+      contentEnd = index;
+      endIndex = index;
+      break;
     }
   }
 
-  return issues;
+  if (endIndex === undefined) {
+    return {
+      endIndex: units.length - 1,
+      valid: false,
+    };
+  }
+
+  const content = units
+    .slice(contentStart, contentEnd)
+    .map((unit) => unit.value)
+    .join("");
+  const match = /^([0-9]+)(?:,([0-9]*))?$/.exec(content);
+  if (match === null) {
+    return { endIndex, valid: false };
+  }
+
+  const lower = Number.parseInt(match[1], 10);
+  const upper =
+    match[2] === undefined || match[2] === ""
+      ? undefined
+      : Number.parseInt(match[2], 10);
+  const maximum = syntax.dialect === "gnu" ? 32767 : 255;
+  return {
+    endIndex,
+    valid:
+      lower <= maximum &&
+      (upper === undefined || (upper <= maximum && lower <= upper)),
+  };
+}
+
+function isBreBranchEnd(units, index, dialect) {
+  if (index >= units.length) {
+    return true;
+  }
+  return (
+    units[index].value === "\\" &&
+    (units[index + 1]?.value === ")" ||
+      (dialect === "gnu" && units[index + 1]?.value === "|"))
+  );
 }
 
 function regexAnalysis(regex, syntax) {
   const issues = [];
   const openGroups = [];
   const closedGroups = new Set();
+  const units = semanticRegexUnits(regex, syntax);
   let groupCount = 0;
-  const tokens = regex
-    .descendantsOfType([
-      "regex_group_open",
-      "regex_group_close",
-      "regex_backreference",
-    ])
-    .sort(compareIssueRanges);
+  let canRepeat = false;
+  let atBranchStart = true;
+  let index = 0;
 
-  for (const token of tokens) {
-    if (token.type === "regex_group_open") {
-      groupCount += 1;
-      openGroups.push({ node: token, number: groupCount });
+  while (index < units.length) {
+    const unit = units[index];
+    if (unit.value === "[") {
+      const analysis = bracketAnalysis(regex, units, index, syntax);
+      issues.push(...analysis.issues);
+      canRepeat = true;
+      atBranchStart = false;
+      index = analysis.endIndex + 1;
       continue;
     }
 
-    if (token.type === "regex_group_close") {
+    const interval = intervalAt(units, index, syntax);
+    if (interval !== undefined) {
+      if (!interval.valid) {
+        issues.push(
+          issueForRegexUnits(
+            regex,
+            units,
+            "invalid_regex_interval",
+            index,
+            interval.endIndex,
+          ),
+        );
+      } else if (!canRepeat) {
+        issues.push(
+          issueForRegexUnits(
+            regex,
+            units,
+            "invalid_regex_quantifier",
+            index,
+            interval.endIndex,
+          ),
+        );
+      }
+      canRepeat = syntax.dialect === "gnu" && canRepeat;
+      atBranchStart = false;
+      index = interval.endIndex + 1;
+      continue;
+    }
+
+    const escaped = unit.value === "\\" && index + 1 < units.length;
+    const nextValue = units[index + 1]?.value;
+    if (unit.value === "\\" && !escaped) {
+      issues.push(
+        issueForRegexUnits(regex, units, "incomplete_escape", index, index),
+      );
+      canRepeat = false;
+      atBranchStart = false;
+      index += 1;
+      continue;
+    }
+    const groupOpen =
+      (syntax.regex === "bre" && escaped && nextValue === "(") ||
+      (syntax.regex === "ere" && unit.value === "(");
+    if (groupOpen) {
+      groupCount += 1;
+      openGroups.push({
+        startIndex: index,
+        endIndex: index + (syntax.regex === "bre" ? 1 : 0),
+        number: groupCount,
+      });
+      canRepeat = false;
+      atBranchStart = true;
+      index += syntax.regex === "bre" ? 2 : 1;
+      continue;
+    }
+
+    const groupClose =
+      (syntax.regex === "bre" && escaped && nextValue === ")") ||
+      (syntax.regex === "ere" && unit.value === ")");
+    if (groupClose) {
       const group = openGroups.pop();
       if (group === undefined) {
         if (syntax.regex === "bre" || syntax.dialect === "gnu") {
-          issues.push(issueAt(token, "unexpected_regex_group_close"));
+          issues.push(
+            issueForRegexUnits(
+              regex,
+              units,
+              "unexpected_regex_group_close",
+              index,
+              index + (syntax.regex === "bre" ? 1 : 0),
+            ),
+          );
         }
+        canRepeat = syntax.regex === "ere" && syntax.dialect === "posix";
       } else {
         closedGroups.add(group.number);
+        canRepeat = true;
       }
+      atBranchStart = false;
+      index += syntax.regex === "bre" ? 2 : 1;
       continue;
     }
 
-    if (syntax.dialect === "posix" && syntax.regex === "ere") {
-      issues.push(issueAt(token, "unsupported_pattern_backreference"));
-    } else {
-      const groupNumber = Number.parseInt(token.text.slice(1), 10);
-      if (!closedGroups.has(groupNumber)) {
-        issues.push(issueAt(token, "invalid_backreference"));
+    if (escaped && /^[1-9]$/.test(nextValue)) {
+      if (syntax.dialect === "posix" && syntax.regex === "ere") {
+        issues.push(
+          issueForRegexUnits(
+            regex,
+            units,
+            "unsupported_pattern_backreference",
+            index,
+            index + 1,
+          ),
+        );
+      } else {
+        const groupNumber = Number.parseInt(nextValue, 10);
+        if (!closedGroups.has(groupNumber)) {
+          issues.push(
+            issueForRegexUnits(
+              regex,
+              units,
+              "invalid_backreference",
+              index,
+              index + 1,
+            ),
+          );
+        }
       }
+      canRepeat = true;
+      atBranchStart = false;
+      index += 2;
+      continue;
     }
+
+    const alternation =
+      (syntax.regex === "ere" && unit.value === "|") ||
+      (syntax.regex === "bre" &&
+        syntax.dialect === "gnu" &&
+        escaped &&
+        nextValue === "|");
+    if (alternation) {
+      canRepeat = false;
+      atBranchStart = true;
+      index += syntax.regex === "bre" ? 2 : 1;
+      continue;
+    }
+
+    const quantifierEnd =
+      unit.value === "*" ||
+      (syntax.regex === "ere" && (unit.value === "+" || unit.value === "?"))
+        ? index
+        : syntax.regex === "bre" &&
+            syntax.dialect === "gnu" &&
+            escaped &&
+            (nextValue === "+" || nextValue === "?")
+          ? index + 1
+          : undefined;
+    if (quantifierEnd !== undefined) {
+      if (
+        syntax.dialect === "posix" &&
+        syntax.regex === "bre" &&
+        unit.value === "*" &&
+        !canRepeat &&
+        atBranchStart
+      ) {
+        canRepeat = true;
+        atBranchStart = false;
+        index = quantifierEnd + 1;
+        continue;
+      }
+      if (!canRepeat) {
+        issues.push(
+          issueForRegexUnits(
+            regex,
+            units,
+            "invalid_regex_quantifier",
+            index,
+            quantifierEnd,
+          ),
+        );
+      }
+      canRepeat = syntax.dialect === "gnu" && canRepeat;
+      atBranchStart = false;
+      index = quantifierEnd + 1;
+      continue;
+    }
+
+    if (escaped) {
+      canRepeat = true;
+      atBranchStart = false;
+      index += 2;
+      continue;
+    }
+
+    if (
+      (syntax.regex === "ere" && (unit.value === "^" || unit.value === "$")) ||
+      (syntax.regex === "bre" &&
+        ((unit.value === "^" && atBranchStart) ||
+          (unit.value === "$" &&
+            isBreBranchEnd(units, index + 1, syntax.dialect))))
+    ) {
+      canRepeat = false;
+      index += 1;
+      continue;
+    }
+
+    canRepeat = true;
+    atBranchStart = false;
+    index += 1;
   }
 
-  for (const { node } of openGroups) {
+  for (const group of openGroups) {
     issues.push(
-      issueAt(node, "unclosed_regex_group", node, {
-        closingText: syntax.regex === "bre" ? "\\)" : ")",
-      }),
+      issueForRegexUnits(
+        regex,
+        units,
+        "unclosed_regex_group",
+        group.startIndex,
+        group.endIndex,
+        {
+          closingText: syntax.regex === "bre" ? "\\)" : ")",
+        },
+      ),
     );
   }
-  issues.push(...bracketRangeIssueNodes(regex));
 
   return { groupCount, issues };
 }
@@ -1076,6 +1567,17 @@ function regexIssueNodes(containers, syntax) {
           issues.push(
             issueRange("missing_previous_regex", opening, closing, ""),
           );
+        }
+      }
+      if (syntax.dialect === "gnu") {
+        const flags = container.childForFieldName("flags");
+        for (const modifier of flags?.namedChildren ?? []) {
+          if (
+            modifier.type === "ignore_case_flag" ||
+            modifier.type === "multiline_flag"
+          ) {
+            issues.push(issueAt(modifier, "invalid_empty_regex_modifier"));
+          }
         }
       }
     } else {
@@ -1105,7 +1607,7 @@ function regexIssueNodes(containers, syntax) {
   return issues;
 }
 
-function decodedCharacterLength(text) {
+function decodedCharacterLength(text, dialect) {
   const characters = [...text];
   let length = 0;
 
@@ -1114,6 +1616,21 @@ function decodedCharacterLength(text) {
       index += 1;
       if (characters[index] === "\r" && characters[index + 1] === "\n") {
         index += 1;
+      } else if (dialect === "gnu") {
+        const escapeKind = characters[index];
+        const numericFormat = gnuNumericEscapeFormats[escapeKind];
+        if (numericFormat !== undefined) {
+          let digits = 0;
+          while (
+            digits < numericFormat.maximumDigits &&
+            numericFormat.digitPattern.test(characters[index + 1] ?? "")
+          ) {
+            index += 1;
+            digits += 1;
+          }
+        } else if (escapeKind === "c" && index + 1 < characters.length) {
+          index += 1;
+        }
       }
     }
     length += 1;
@@ -1122,7 +1639,7 @@ function decodedCharacterLength(text) {
   return length;
 }
 
-function translationIssueNodes(arguments_) {
+function translationIssueNodes(arguments_, syntax) {
   const issues = [];
 
   for (const argument of arguments_) {
@@ -1135,8 +1652,11 @@ function translationIssueNodes(arguments_) {
       continue;
     }
 
-    const sourceLength = decodedCharacterLength(source.text);
-    const destinationLength = decodedCharacterLength(destination.text);
+    const sourceLength = decodedCharacterLength(source.text, syntax.dialect);
+    const destinationLength = decodedCharacterLength(
+      destination.text,
+      syntax.dialect,
+    );
     if (sourceLength !== destinationLength) {
       issues.push(
         issueAt(argument, "mismatched_translation", argument, {
@@ -1150,14 +1670,9 @@ function translationIssueNodes(arguments_) {
   return issues;
 }
 
-function numericValueIssueNodes(steps, occurrences) {
+function substitutionOccurrenceIssueNodes(occurrences) {
   const issues = [];
 
-  for (const step of steps) {
-    if (/^0+$/.test(step.text)) {
-      issues.push(issueAt(step, "invalid_step_value"));
-    }
-  }
   for (const occurrence of occurrences) {
     if (
       occurrence.parent?.type === "substitute_flags" &&
@@ -1170,8 +1685,41 @@ function numericValueIssueNodes(steps, occurrences) {
   return issues;
 }
 
+function duplicateSubstitutionFlagIssueNodes(arguments_, syntax) {
+  if (syntax.dialect !== "gnu") {
+    return [];
+  }
+
+  const issues = [];
+  const uniqueFlags = [
+    { type: "global_flag", kind: "flag" },
+    { type: "print_flag", kind: "flag" },
+    { type: "occurrence_flag", kind: "occurrence" },
+  ];
+
+  for (const argument of arguments_) {
+    const flags = argument.childForFieldName("flags");
+    if (flags === null) {
+      continue;
+    }
+    for (const { type, kind } of uniqueFlags) {
+      const matching = flags.namedChildren.filter((node) => node.type === type);
+      for (const duplicate of matching.slice(1)) {
+        issues.push(
+          issueAt(duplicate, "duplicate_substitution_flag", duplicate, {
+            kind,
+          }),
+        );
+      }
+    }
+  }
+
+  return issues;
+}
+
 function semanticIssueNodes(nodesByType, source, syntax) {
   const regexContainers = [
+    ...nodesByType.escaped_regex_address,
     ...nodesByType.regex_address,
     ...nodesByType.substitute_argument,
   ].sort(compareIssueRanges);
@@ -1179,17 +1727,22 @@ function semanticIssueNodes(nodesByType, source, syntax) {
   return [
     ...addressIssueNodes(nodesByType.command, source, syntax.dialect),
     ...regexIssueNodes(regexContainers, syntax),
-    ...translationIssueNodes(nodesByType.translate_argument),
-    ...numericValueIssueNodes(
-      nodesByType.step_value,
-      nodesByType.occurrence_flag,
+    ...translationIssueNodes(nodesByType.translate_argument, syntax),
+    ...substitutionOccurrenceIssueNodes(nodesByType.occurrence_flag),
+    ...duplicateSubstitutionFlagIssueNodes(
+      nodesByType.substitute_argument,
+      syntax,
     ),
   ];
 }
 
-function diagnostic(document, node, { code, message }) {
+function diagnostic(
+  document,
+  node,
+  { code, message, severity = DiagnosticSeverity.Error },
+) {
   return {
-    severity: DiagnosticSeverity.Error,
+    severity,
     range: rangeForNode(document, node),
     message,
     code,
@@ -1211,7 +1764,7 @@ function compareDiagnostics(left, right) {
   );
 }
 
-function labelDiagnostics(document, definitions, references) {
+function labelDiagnostics(document, definitions, references, syntax) {
   const definedLabels = new Set();
   const issues = [];
 
@@ -1219,7 +1772,7 @@ function labelDiagnostics(document, definitions, references) {
     if (definition.hasError || definition.text === "") {
       continue;
     }
-    if (definedLabels.has(definition.text)) {
+    if (syntax.dialect !== "gnu" && definedLabels.has(definition.text)) {
       issues.push({
         node: definition,
         code: "duplicate-label",
@@ -1238,13 +1791,14 @@ function labelDiagnostics(document, definitions, references) {
       issues.push({
         node: reference,
         code: "undefined-label",
-        message: `Undefined sed label: \`${reference.text}\`.`,
+        message: `No definition for sed label \`${reference.text}\` was found in this document.`,
+        severity: DiagnosticSeverity.Warning,
       });
     }
   }
 
-  return issues.map(({ node, code, message }) =>
-    diagnostic(document, node, { code, message }),
+  return issues.map(({ node, ...description }) =>
+    diagnostic(document, node, description),
   );
 }
 
@@ -1266,6 +1820,7 @@ export function createDiagnostics(document, syntax) {
       document,
       nodesByType.label_definition,
       nodesByType.label_reference,
+      syntax,
     ),
   ].sort(compareDiagnostics);
 }

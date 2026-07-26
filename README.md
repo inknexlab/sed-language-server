@@ -18,7 +18,9 @@ npm install --global @inknexlab/sed-language-server
 
 - Diagnostics
 - Document formatting
+- Find references
 - Go to definition
+- Rename labels
 
 ## Configuration
 
@@ -63,6 +65,11 @@ vim.lsp.config("sed_language_server", {
 
 vim.lsp.enable("sed_language_server")
 ```
+
+## Parser
+
+Parsing is powered by the
+[tree-sitter-sed](https://github.com/inknexlab/tree-sitter-sed) grammars.
 
 ## License
 

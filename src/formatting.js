@@ -3,7 +3,7 @@ import { collectSyntaxIssueNodes, syntaxTreeFor } from "./syntax.js";
 const maximumFormattingBlockDepth = 256;
 
 function lineEndingCount(source) {
-  return source.match(/\r\n|\n/g)?.length ?? 0;
+  return source.split("\n").length - 1;
 }
 
 function formatCommandList(
@@ -121,7 +121,9 @@ function hasExcessiveBlockNesting(rootNode) {
 }
 
 function formatScript(rootNode, source, options) {
-  const lineEnding = source.match(/\r\n|\n/)?.[0] ?? "\n";
+  const newlineIndex = source.indexOf("\n");
+  const lineEnding =
+    newlineIndex > 0 && source[newlineIndex - 1] === "\r" ? "\r\n" : "\n";
   const indentation = indentationFor(options);
   const firstLine = rootNode.children.find(
     (child) => child.type === "first_line_silent",

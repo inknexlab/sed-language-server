@@ -1285,16 +1285,16 @@ function intervalAt(units, startIndex, syntax) {
     .slice(contentStart, contentEnd)
     .map((unit) => unit.value)
     .join("");
-  const match = /^([0-9]+)(?:,([0-9]*))?$/.exec(content);
+  const match = /^([0-9]+)(,([0-9]*))?$/.exec(content);
   if (match === null) {
     return { endIndex, valid: false };
   }
 
   const lower = Number.parseInt(match[1], 10);
   const upper =
-    match[2] === undefined || match[2] === ""
+    match[3] === undefined || match[3] === ""
       ? undefined
-      : Number.parseInt(match[2], 10);
+      : Number.parseInt(match[3], 10);
   const maximum = syntax.dialect === "gnu" ? 32767 : 255;
   return {
     endIndex,

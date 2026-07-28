@@ -3,7 +3,7 @@ import test from "node:test";
 import { DiagnosticSeverity } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { createDiagnostics } from "../src/diagnostics.js";
-import { invalidateSyntaxTreeCache } from "../src/syntax.js";
+import { invalidateSyntaxTreeCache, syntaxTreeFor } from "../src/syntax.js";
 
 const posixBre = { dialect: "posix", regex: "bre" };
 const posixEre = { dialect: "posix", regex: "ere" };
@@ -31,6 +31,57 @@ test("accepts valid scripts in each selected syntax variant", () => {
   assert.deepEqual(summariesFor("s/(foo)+/bar/g\n", posixEre), []);
   assert.deepEqual(summariesFor("0~2p\nz\nT loop\n:loop\n", gnuBre), []);
   assert.deepEqual(summariesFor("s/(a|b)+/\\1/\n", gnuEre), []);
+});
+
+test("bundles the current regular expression CST in every Wasm grammar", () => {
+  const document = documentFor("s#^a.\\.\\n[^a-z]$#x#");
+  const expectedParts = [
+    ["regex_beginning_anchor", "^"],
+    ["regex_literal", "a"],
+    ["regex_wildcard", "."],
+    ["regex_quoted_escape", "\\."],
+    ["regex_newline_escape", "\\n"],
+    ["bracket_expression", "[^a-z]"],
+    ["regex_end_anchor", "$"],
+  ];
+
+  for (const syntax of [posixBre, posixEre, gnuBre, gnuEre]) {
+    const tree = syntaxTreeFor(document, syntax);
+    const regex = tree.rootNode.descendantsOfType("regex")[0];
+    assert.deepEqual(
+      regex.namedChildren.map((node) => [node.type, node.text]),
+      expectedParts,
+      `${syntax.dialect}-${syntax.regex}`,
+    );
+
+    const bracket = regex.descendantsOfType("bracket_expression")[0];
+    assert.deepEqual(
+      bracket.namedChildren.map((node) => [node.type, node.text]),
+      [
+        ["regex_bracket_delimiter", "["],
+        ["regex_bracket_negation", "^"],
+        ["regex_bracket_literal", "a"],
+        ["regex_bracket_hyphen", "-"],
+        ["regex_bracket_literal", "z"],
+        ["regex_bracket_delimiter", "]"],
+      ],
+      `${syntax.dialect}-${syntax.regex}`,
+    );
+    assert.equal(
+      bracket.childForFieldName("opening_delimiter").type,
+      "regex_bracket_delimiter",
+    );
+    assert.equal(
+      bracket.childForFieldName("negation").type,
+      "regex_bracket_negation",
+    );
+    assert.equal(
+      bracket.childForFieldName("closing_delimiter").type,
+      "regex_bracket_delimiter",
+    );
+  }
+
+  invalidateSyntaxTreeCache(document);
 });
 
 test("uses separate POSIX and GNU grammars", () => {

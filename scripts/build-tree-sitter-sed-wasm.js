@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const treeSitterSedRevision = "3f9c73686d754ec86029561b872eb9d6d4980621";
+const treeSitterSedRevision = "abf5aaf42f6968ec15e50ef17229a68abaa151e2";
 const variants = ["posix-bre", "posix-ere", "gnu-bre", "gnu-ere"];
 const grammarDirectoryArgument = process.argv[2];
 

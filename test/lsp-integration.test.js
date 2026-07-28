@@ -207,18 +207,7 @@ test("serves diagnostics, label navigation, and formatting through the LSP docum
     "textDocument/publishDiagnostics",
     ({ uri: diagnosticUri, version }) => diagnosticUri === uri && version === 1,
   );
-  assert.deepEqual(openedDiagnostics.diagnostics, [
-    {
-      severity: DiagnosticSeverity.Error,
-      range: {
-        start: { line: 4, character: 0 },
-        end: { line: 4, character: 1 },
-      },
-      message: "Unknown sed command: `z`.",
-      code: "invalid-command",
-      source: "sed-language-server",
-    },
-  ]);
+  assert.deepEqual(openedDiagnostics.diagnostics, []);
 
   assert.deepEqual(
     await client.request("textDocument/definition", {
@@ -357,6 +346,73 @@ test("serves diagnostics, label navigation, and formatting through the LSP docum
   await shutdown(client);
 });
 
+test("defaults an explicit POSIX dialect to BRE", async (t) => {
+  const client = new LspClient();
+  t.after(() => client.dispose());
+
+  await initialize(client, { dialect: "posix" });
+
+  const uri = "file:///explicit-posix-bre.sed";
+  await client.notify("textDocument/didOpen", {
+    textDocument: {
+      uri,
+      languageId: "sed",
+      version: 1,
+      text: "z\n",
+    },
+  });
+
+  const diagnostics = await client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    ({ uri: diagnosticUri }) => diagnosticUri === uri,
+  );
+  assert.deepEqual(diagnostics.diagnostics, [
+    {
+      severity: DiagnosticSeverity.Error,
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 1 },
+      },
+      message: "Unknown sed command: `z`.",
+      code: "invalid-command",
+      source: "sed-language-server",
+    },
+  ]);
+
+  await shutdown(client);
+});
+
+test("uses canonical GNU BRE for null and empty initialization options", async (t) => {
+  for (const [name, initializationOptions] of [
+    ["null", null],
+    ["empty", {}],
+  ]) {
+    await t.test(name, async (t) => {
+      const client = new LspClient();
+      t.after(() => client.dispose());
+
+      await initialize(client, initializationOptions);
+
+      const uri = `file:///${name}-options.sed`;
+      await client.notify("textDocument/didOpen", {
+        textDocument: {
+          uri,
+          languageId: "sed",
+          version: 1,
+          text: "z\ns/\\(a\\)/\\1/\n",
+        },
+      });
+      const diagnostics = await client.waitForNotification(
+        "textDocument/publishDiagnostics",
+        ({ uri: diagnosticUri }) => diagnosticUri === uri,
+      );
+      assert.deepEqual(diagnostics.diagnostics, []);
+
+      await shutdown(client);
+    });
+  }
+});
+
 test("rejects an invalid sed dialect initialization option", async (t) => {
   const client = new LspClient();
   t.after(() => client.dispose());
@@ -399,11 +455,11 @@ test("rejects an invalid regular expression initialization option", async (t) =>
   );
 });
 
-test("uses GNU ERE selected at initialization and keeps both syntax axes fixed", async (t) => {
+test("defaults an explicit ERE mode to GNU and keeps both syntax axes fixed", async (t) => {
   const client = new LspClient();
   t.after(() => client.dispose());
 
-  await initialize(client, { dialect: "gnu", regex: "ere" });
+  await initialize(client, { regex: "ere" });
   await client.notify("workspace/didChangeConfiguration", {
     settings: {
       sedLanguageServer: {

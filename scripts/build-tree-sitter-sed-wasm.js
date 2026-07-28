@@ -3,8 +3,29 @@ import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const treeSitterSedRevision = "abf5aaf42f6968ec15e50ef17229a68abaa151e2";
-const variants = ["posix-bre", "posix-ere", "gnu-bre", "gnu-ere"];
+const treeSitterSedRevision = "7b4e3ba27dd462a9a30830a3fbbad08a4ed14245";
+const languages = [
+  {
+    directory: ".",
+    wasmName: "tree-sitter-sed.wasm",
+  },
+  {
+    directory: "posix-bre",
+    wasmName: "tree-sitter-sed-posix-bre.wasm",
+  },
+  {
+    directory: "posix-ere",
+    wasmName: "tree-sitter-sed-posix-ere.wasm",
+  },
+  {
+    directory: "gnu-bre",
+    wasmName: "tree-sitter-sed-gnu-bre.wasm",
+  },
+  {
+    directory: "gnu-ere",
+    wasmName: "tree-sitter-sed-gnu-ere.wasm",
+  },
+];
 const grammarDirectoryArgument = process.argv[2];
 
 if (grammarDirectoryArgument === undefined) {
@@ -55,17 +76,14 @@ if (statusResult.stdout.trim() !== "") {
 
 mkdirSync(vendorDirectory, { recursive: true });
 
-for (const variant of variants) {
-  const sourceDirectory = resolve(grammarDirectory, variant);
+for (const { directory, wasmName } of languages) {
+  const sourceDirectory = resolve(grammarDirectory, directory);
   const parserSource = resolve(sourceDirectory, "src/parser.c");
   if (!existsSync(parserSource)) {
     throw new Error(`Missing generated parser: ${parserSource}`);
   }
 
-  const outputPath = resolve(
-    vendorDirectory,
-    `tree-sitter-sed-${variant}.wasm`,
-  );
+  const outputPath = resolve(vendorDirectory, wasmName);
 
   const buildResult = spawnSync(
     process.execPath,
@@ -73,7 +91,7 @@ for (const variant of variants) {
     { stdio: "inherit" },
   );
   if (buildResult.status !== 0) {
-    throw new Error(`Failed to build the ${variant} sed grammar.`, {
+    throw new Error(`Failed to build the ${directory} sed grammar.`, {
       cause: buildResult.error,
     });
   }

@@ -3,27 +3,26 @@ import { Language, Parser } from "web-tree-sitter";
 
 await Parser.init();
 
-async function createParser(key) {
-  const path = fileURLToPath(
-    new URL(`../vendor/tree-sitter-sed-${key}.wasm`, import.meta.url),
-  );
+async function createParser(filename) {
+  const path = fileURLToPath(new URL(`../vendor/${filename}`, import.meta.url));
   return new Parser().setLanguage(await Language.load(path));
 }
 
 const parsers = {
-  "posix-bre": await createParser("posix-bre"),
-  "posix-ere": await createParser("posix-ere"),
-  "gnu-bre": await createParser("gnu-bre"),
-  "gnu-ere": await createParser("gnu-ere"),
+  sed: await createParser("tree-sitter-sed.wasm"),
+  "posix-bre": await createParser("tree-sitter-sed-posix-bre.wasm"),
+  "posix-ere": await createParser("tree-sitter-sed-posix-ere.wasm"),
+  "gnu-bre": await createParser("tree-sitter-sed-gnu-bre.wasm"),
+  "gnu-ere": await createParser("tree-sitter-sed-gnu-ere.wasm"),
 };
 const documentTrees = new Map();
 
-function keyForSyntax(syntax) {
-  return `${syntax.dialect}-${syntax.regex}`;
+function parserKeyForSyntax(syntax) {
+  return syntax.parser ?? `${syntax.dialect}-${syntax.regex}`;
 }
 
 export function syntaxTreeFor(document, syntax) {
-  const key = keyForSyntax(syntax);
+  const key = parserKeyForSyntax(syntax);
   const source = document.getText();
   let trees = documentTrees.get(document.uri);
 

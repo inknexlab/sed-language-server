@@ -22,24 +22,21 @@ npm install --global @inknexlab/sed-language-server
 - Go to definition
 - Rename labels
 
-## Configuration
-
-Pass `dialect` and `regex` as LSP initialization options:
-
-| `dialect` | `regex` | Syntax |
-| --- | --- | --- |
-| `"posix"` | `"bre"` | POSIX sed with basic regular expressions |
-| `"posix"` | `"ere"` | POSIX sed with extended regular expressions |
-| `"gnu"` | `"bre"` | GNU sed with basic regular expressions |
-| `"gnu"` | `"ere"` | GNU sed with extended regular expressions |
-
-The defaults are `"posix"` and `"bre"`. The selection remains fixed for the
-server process.
-
 ## Editor setup
 
 Configure the LSP client to run `sed-language-server --stdio` for the `sed`
 language ID or filetype.
+
+### Neovim
+
+```lua
+vim.lsp.config("sed_language_server", {
+  cmd = { "sed-language-server", "--stdio" },
+  filetypes = { "sed" },
+})
+
+vim.lsp.enable("sed_language_server")
+```
 
 ### Emacs
 
@@ -48,22 +45,37 @@ language ID or filetype.
 
 (add-to-list 'eglot-server-programs
              '((sed-ts-mode sed-mode) .
-               ("sed-language-server" "--stdio"
-                :initializationOptions (:dialect "posix" :regex "bre"))))
+               ("sed-language-server" "--stdio")))
 ```
 
 Run `M-x eglot` in a `sed-ts-mode` or `sed-mode` buffer.
 
+## Variants
+
+The default syntax is GNU `sed` 4.10 using Basic Regular Expressions (BRE).
+Pass `dialect` and `regex` as LSP initialization options to select another
+syntax:
+
+| `dialect` | `regex` | Syntax |
+| --- | --- | --- |
+| `"gnu"` | `"bre"` | GNU sed with basic regular expressions |
+| `"gnu"` | `"ere"` | GNU sed with extended regular expressions |
+| `"posix"` | `"bre"` | POSIX sed with basic regular expressions |
+| `"posix"` | `"ere"` | POSIX sed with extended regular expressions |
+
+Either option may be omitted; its axis keeps the default shown above.
+The selection remains fixed for the server process.
+
 ### Neovim
 
 ```lua
-vim.lsp.config("sed_language_server", {
-  cmd = { "sed-language-server", "--stdio" },
-  filetypes = { "sed" },
-  init_options = { dialect = "posix", regex = "bre" },
-})
+init_options = { dialect = "posix", regex = "ere" }
+```
 
-vim.lsp.enable("sed_language_server")
+### Emacs
+
+```elisp
+:initializationOptions (:dialect "posix" :regex "ere")
 ```
 
 ## Parser

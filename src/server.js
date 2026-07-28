@@ -22,10 +22,11 @@ if (process.argv.length === 2) {
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
-const defaultSyntax = {
-  dialect: "posix",
+const defaultSyntax = Object.freeze({
+  dialect: "gnu",
   regex: "bre",
-};
+  parser: "sed",
+});
 let activeSyntax = defaultSyntax;
 
 function resolveSyntax(options) {
@@ -57,6 +58,10 @@ function resolveSyntax(options) {
   return {
     syntax: {
       dialect,
+      parser:
+        options.dialect === undefined && options.regex === undefined
+          ? defaultSyntax.parser
+          : `${dialect}-${regex}`,
       regex,
     },
   };

@@ -3,8 +3,7 @@
 [![CI](https://github.com/inknexlab/sed-language-server/actions/workflows/ci.yml/badge.svg)](https://github.com/inknexlab/sed-language-server/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@inknexlab/sed-language-server)](https://www.npmjs.com/package/@inknexlab/sed-language-server)
 
-A Language Server Protocol implementation for POSIX and GNU `sed`, with
-explicit BRE and ERE support.
+A Language Server Protocol implementation for POSIX and GNU `sed`.
 
 ## Installation
 
@@ -40,15 +39,16 @@ vim.lsp.enable("sed_language_server")
 
 ### Emacs
 
+Emacs does not include a major mode for `sed`. After installing or defining
+one, register its mode symbol with Eglot:
+
 ```elisp
 (require 'eglot)
 
 (add-to-list 'eglot-server-programs
-             '((sed-ts-mode sed-mode) .
+             '(your-sed-mode .
                ("sed-language-server" "--stdio")))
 ```
-
-Run `M-x eglot` in a `sed-ts-mode` or `sed-mode` buffer.
 
 ## Variants
 

@@ -1,0 +1,150 @@
+{
+  "revision": "fe85f809435c35a4e9fc01b8dccbcdda3678d583",
+  "languages": {
+    "bre": {
+      "language": "posix_sed_bre",
+      "wasm": "tree-sitter-sed-posix-bre.wasm",
+      "outcomes": {
+        "implementation_defined_syntax": [
+          "bre_plus_escape",
+          "bre_question_mark_escape",
+          "bre_vertical_line_escape"
+        ],
+        "implementation_option_syntax": [
+          "bre_subexpression_left_anchor",
+          "bre_subexpression_right_anchor",
+          "omitted_file_separator"
+        ],
+        "incomplete_syntax": [
+          "incomplete_regular_expression",
+          "incomplete_regular_expression_escape",
+          "incomplete_replacement",
+          "incomplete_replacement_escape",
+          "incomplete_translation",
+          "incomplete_translation_escape",
+          "missing_closing_brace",
+          "missing_function",
+          "missing_label",
+          "missing_opening_delimiter",
+          "missing_rfile",
+          "missing_subexpression",
+          "missing_text",
+          "missing_text_introducer",
+          "missing_wfile"
+        ],
+        "nonconforming_syntax": [
+          "additional_address",
+          "blanks_around_address_separator",
+          "duplicate_negation",
+          "excess_addresses",
+          "forbidden_command_separator",
+          "invalid_address",
+          "invalid_delimiter",
+          "invalid_substitution_flag",
+          "missing_address_separator",
+          "missing_command_separator",
+          "unexpected_command_text",
+          "unknown_function",
+          "unmatched_closing_brace",
+          "zero_substitution_occurrence"
+        ],
+        "undefined_syntax": [
+          "adjacent_duplication_symbol",
+          "character_class_range_end",
+          "character_class_range_start",
+          "empty_alternative",
+          "empty_subexpression",
+          "leading_duplication_symbol",
+          "malformed_bracket_term",
+          "malformed_interval",
+          "missing_bracket_list",
+          "omitted_address",
+          "ordinary_character_escape",
+          "shared_range_endpoint",
+          "unclosed_bracket_expression",
+          "unclosed_subexpression",
+          "undefined_translation_escape",
+          "unmatched_interval_close",
+          "unmatched_subexpression_close"
+        ],
+        "unspecified_syntax": [
+          "ambiguous_bracket_expression",
+          "blanks_after_negation",
+          "equivalence_class_range_end",
+          "equivalence_class_range_start",
+          "replacement_ampersand_delimiter_escape",
+          "special_delimiter_escape",
+          "unspecified_replacement_escape",
+          "unspecified_text_escape"
+        ]
+      }
+    },
+    "ere": {
+      "language": "posix_sed_ere",
+      "wasm": "tree-sitter-sed-posix-ere.wasm",
+      "outcomes": {
+        "implementation_option_syntax": ["omitted_file_separator"],
+        "incomplete_syntax": [
+          "incomplete_regular_expression",
+          "incomplete_regular_expression_escape",
+          "incomplete_replacement",
+          "incomplete_replacement_escape",
+          "incomplete_translation",
+          "incomplete_translation_escape",
+          "missing_closing_brace",
+          "missing_function",
+          "missing_label",
+          "missing_opening_delimiter",
+          "missing_rfile",
+          "missing_subexpression",
+          "missing_text",
+          "missing_text_introducer",
+          "missing_wfile"
+        ],
+        "nonconforming_syntax": [
+          "additional_address",
+          "blanks_around_address_separator",
+          "duplicate_negation",
+          "excess_addresses",
+          "forbidden_command_separator",
+          "invalid_address",
+          "invalid_delimiter",
+          "invalid_substitution_flag",
+          "missing_address_separator",
+          "missing_command_separator",
+          "unexpected_command_text",
+          "unknown_function",
+          "unmatched_closing_brace",
+          "zero_substitution_occurrence"
+        ],
+        "undefined_syntax": [
+          "adjacent_duplication_symbol",
+          "character_class_range_end",
+          "character_class_range_start",
+          "empty_alternative",
+          "empty_subexpression",
+          "leading_duplication_symbol",
+          "malformed_bracket_term",
+          "malformed_interval",
+          "missing_bracket_list",
+          "omitted_address",
+          "ordinary_character_escape",
+          "shared_range_endpoint",
+          "unclosed_bracket_expression",
+          "unclosed_subexpression",
+          "undefined_translation_escape"
+        ],
+        "unspecified_syntax": [
+          "ambiguous_bracket_expression",
+          "blanks_after_negation",
+          "equivalence_class_range_end",
+          "equivalence_class_range_start",
+          "replacement_ampersand_delimiter_escape",
+          "special_delimiter_escape",
+          "unspecified_replacement_escape",
+          "unspecified_text_escape"
+        ]
+      }
+    }
+  }
+}

@@ -3,142 +3,183 @@
 import {
   createConnection,
   ErrorCodes,
-  ProposedFeatures,
+  LSPErrorCodes,
+  PositionEncodingKind,
   ResponseError,
   TextDocumentSyncKind,
   TextDocuments,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { createDefinitionLocations } from "./definition.js";
-import { createDiagnostics } from "./diagnostics.js";
-import { createFormattingEdits } from "./formatting.js";
-import { createReferenceLocations } from "./references.js";
-import { createRenameWorkspaceEdit, prepareLabelRename } from "./rename.js";
-import { invalidateSyntaxTreeCache } from "./syntax.js";
+import { diagnostics } from "./diagnostics.js";
+import { formattingEdits } from "./formatting.js";
+import {
+  definitions,
+  prepareRename,
+  RenameError,
+  references,
+  rename,
+} from "./labels.js";
+import { regularExpressionModes, SyntaxStore } from "./syntax.js";
 
 if (process.argv.length === 2) {
   process.argv.push("--stdio");
 }
 
-const connection = createConnection(ProposedFeatures.all);
-const documents = new TextDocuments(TextDocument);
-const defaultSyntax = Object.freeze({
-  dialect: "gnu",
-  regex: "bre",
-  parser: "sed",
-});
-let activeSyntax = defaultSyntax;
+const connection = createConnection();
+let syntaxStore;
 
-function resolveSyntax(options) {
-  if (options === undefined || options === null) {
-    return { syntax: defaultSyntax };
+function initializationMode(options) {
+  if (options === undefined) {
+    return "bre";
   }
-  if (typeof options !== "object" || Array.isArray(options)) {
-    return {
-      error: "Syntax options must be provided as an object or null.",
-    };
+  if (
+    options === null ||
+    typeof options !== "object" ||
+    Array.isArray(options)
+  ) {
+    throw new ResponseError(
+      ErrorCodes.InvalidParams,
+      "initializationOptions must be an object.",
+    );
   }
-
-  const dialect =
-    options.dialect === undefined ? defaultSyntax.dialect : options.dialect;
-  if (dialect !== "posix" && dialect !== "gnu") {
-    return {
-      error: 'The syntax dialect must be either "posix" or "gnu".',
-    };
+  const keys = Object.keys(options);
+  if (keys.some((key) => key !== "regex")) {
+    throw new ResponseError(
+      ErrorCodes.InvalidParams,
+      "The only supported initialization option is 'regex'.",
+    );
   }
-
-  const regex =
-    options.regex === undefined ? defaultSyntax.regex : options.regex;
-  if (regex !== "bre" && regex !== "ere") {
-    return {
-      error: 'The regular expression mode must be either "bre" or "ere".',
-    };
+  const mode = Object.hasOwn(options, "regex") ? options.regex : "bre";
+  if (!regularExpressionModes().includes(mode)) {
+    throw new ResponseError(
+      ErrorCodes.InvalidParams,
+      "initializationOptions.regex must be 'bre' or 'ere'.",
+    );
   }
-
-  return {
-    syntax: {
-      dialect,
-      parser:
-        options.dialect === undefined && options.regex === undefined
-          ? defaultSyntax.parser
-          : `${dialect}-${regex}`,
-      regex,
-    },
-  };
+  return mode;
 }
 
-function publishDiagnostics(document) {
-  return connection.sendDiagnostics({
-    uri: document.uri,
-    version: document.version,
-    diagnostics: createDiagnostics(document, activeSyntax),
+function store() {
+  if (syntaxStore === undefined) {
+    throw new Error("The language server has not been initialized.");
+  }
+  return syntaxStore;
+}
+
+function snapshot(uri) {
+  return syntaxStore?.snapshot(uri);
+}
+
+function publishDiagnostics(uri) {
+  const current = snapshot(uri);
+  if (current === undefined) {
+    return;
+  }
+  connection.sendDiagnostics({
+    uri,
+    version: current.document.version,
+    diagnostics: diagnostics(current),
   });
 }
 
-connection.onInitialize(({ initializationOptions }) => {
-  const result = resolveSyntax(initializationOptions);
-  if (result.error !== undefined) {
-    return new ResponseError(ErrorCodes.InvalidParams, result.error, {
-      retry: false,
-    });
-  }
+const documents = new TextDocuments({
+  create: TextDocument.create,
+  update(document, changes, version) {
+    return store().update(document.uri, changes, version).document;
+  },
+});
 
-  activeSyntax = result.syntax;
+connection.onInitialize(async ({ initializationOptions }) => {
+  const mode = initializationMode(initializationOptions);
+  syntaxStore = await SyntaxStore.create(mode);
   return {
     capabilities: {
-      textDocumentSync: TextDocumentSyncKind.Incremental,
-      definitionProvider: true,
-      documentFormattingProvider: true,
-      referencesProvider: true,
-      renameProvider: {
-        prepareProvider: true,
+      positionEncoding: PositionEncodingKind.UTF16,
+      textDocumentSync: {
+        openClose: true,
+        change: TextDocumentSyncKind.Incremental,
       },
+      definitionProvider: true,
+      referencesProvider: true,
+      renameProvider: { prepareProvider: true },
+      documentFormattingProvider: true,
+    },
+    serverInfo: {
+      name: "sed-language-server",
     },
   };
 });
 
-connection.onDefinition(({ textDocument, position }) => {
-  const document = documents.get(textDocument.uri);
-  return document === undefined
-    ? null
-    : createDefinitionLocations(document, position, activeSyntax);
-});
-
-connection.onReferences(({ textDocument, position, context }) => {
-  const document = documents.get(textDocument.uri);
-  return document === undefined
-    ? null
-    : createReferenceLocations(document, position, activeSyntax, context);
-});
-
-connection.onPrepareRename(({ textDocument, position }) => {
-  const document = documents.get(textDocument.uri);
-  return document === undefined
-    ? null
-    : prepareLabelRename(document, position, activeSyntax);
-});
-
-connection.onRenameRequest(({ textDocument, position, newName }) => {
-  const document = documents.get(textDocument.uri);
-  return document === undefined
-    ? null
-    : createRenameWorkspaceEdit(document, position, activeSyntax, newName);
-});
-
-connection.onDocumentFormatting(({ textDocument, options }) => {
-  const document = documents.get(textDocument.uri);
-  return document === undefined
-    ? []
-    : createFormattingEdits(document, activeSyntax, options);
+documents.onDidOpen(({ document }) => {
+  store().open(document);
 });
 
 documents.onDidChangeContent(({ document }) => {
-  publishDiagnostics(document);
+  publishDiagnostics(document.uri);
 });
 
 documents.onDidClose(({ document }) => {
-  invalidateSyntaxTreeCache(document);
-  connection.sendDiagnostics({ uri: document.uri, diagnostics: [] });
+  syntaxStore?.close(document.uri);
+  connection.sendDiagnostics({
+    uri: document.uri,
+    version: document.version,
+    diagnostics: [],
+  });
+});
+
+connection.onDefinition(({ textDocument, position }) => {
+  const current = snapshot(textDocument.uri);
+  if (current === undefined) {
+    return null;
+  }
+  const locations = definitions(current, position);
+  return locations.length === 0 ? null : locations;
+});
+
+connection.onReferences(({ textDocument, position, context }) => {
+  const current = snapshot(textDocument.uri);
+  if (current === undefined) {
+    return null;
+  }
+  return references(current, position, context.includeDeclaration);
+});
+
+connection.onPrepareRename(({ textDocument, position }) => {
+  const current = snapshot(textDocument.uri);
+  if (current === undefined) {
+    return null;
+  }
+  return prepareRename(current, position) ?? null;
+});
+
+connection.onRenameRequest(({ textDocument, position, newName }) => {
+  const current = snapshot(textDocument.uri);
+  if (current === undefined) {
+    return null;
+  }
+  try {
+    return rename(current, position, newName);
+  } catch (error) {
+    if (error instanceof RenameError) {
+      throw new ResponseError(LSPErrorCodes.RequestFailed, error.message);
+    }
+    throw error;
+  }
+});
+
+connection.onDocumentFormatting(({ textDocument, options }) => {
+  const current = snapshot(textDocument.uri);
+  return current === undefined ? [] : formattingEdits(current, options);
+});
+
+connection.onShutdown(() => {
+  syntaxStore?.dispose();
+  syntaxStore = undefined;
+});
+
+connection.onExit(() => {
+  syntaxStore?.dispose();
+  syntaxStore = undefined;
 });
 
 documents.listen(connection);

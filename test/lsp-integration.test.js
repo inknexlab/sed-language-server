@@ -1,488 +1,288 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import {
   createMessageConnection,
-  DiagnosticSeverity,
-  ErrorCodes,
   StreamMessageReader,
   StreamMessageWriter,
-  TextDocumentSyncKind,
 } from "vscode-languageserver/node";
 
-const packageJson = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-);
-const serverPath = fileURLToPath(
-  new URL(`../${packageJson.bin["sed-language-server"]}`, import.meta.url),
-);
-const requestTimeoutMilliseconds = 5_000;
-
-function timeoutError(operation, stderr) {
-  const details = stderr === "" ? "" : `\nServer stderr:\n${stderr}`;
-  return new Error(`Timed out while waiting for ${operation}.${details}`);
+function startServer() {
+  const child = spawn(process.execPath, ["src/server.js"], {
+    cwd: new URL("..", import.meta.url),
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const connection = createMessageConnection(
+    new StreamMessageReader(child.stdout),
+    new StreamMessageWriter(child.stdin),
+  );
+  connection.listen();
+  return { child, connection, stderr: () => stderr };
 }
 
-class LspClient {
-  constructor() {
-    this.process = spawn(process.execPath, [serverPath], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    this.stderr = "";
-    this.notificationWaiters = [];
-    this.queuedNotifications = [];
-    this.process.stderr.setEncoding("utf8");
-    this.process.stderr.on("data", (chunk) => {
-      this.stderr += chunk;
-    });
-    this.exit = new Promise((resolve) => {
-      this.process.once("error", (error) => {
-        resolve({ code: null, signal: null, error });
-      });
-      this.process.once("exit", (code, signal) => {
-        resolve({ code, signal, error: undefined });
-      });
-    });
-
-    this.connection = createMessageConnection(
-      new StreamMessageReader(this.process.stdout),
-      new StreamMessageWriter(this.process.stdin),
-    );
-    this.connection.onNotification((method, params) => {
-      const waiterIndex = this.notificationWaiters.findIndex(
-        (waiter) => waiter.method === method && waiter.predicate(params),
-      );
-      if (waiterIndex === -1) {
-        this.queuedNotifications.push({ method, params });
+function notification(connection, method, predicate) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      disposable.dispose();
+      reject(new Error(`Timed out waiting for ${method}.`));
+    }, 10_000);
+    const disposable = connection.onNotification(method, (params) => {
+      if (!predicate(params)) {
         return;
       }
-
-      const [waiter] = this.notificationWaiters.splice(waiterIndex, 1);
-      clearTimeout(waiter.timer);
-      waiter.resolve(params);
+      clearTimeout(timeout);
+      disposable.dispose();
+      resolve(params);
     });
-    this.connection.listen();
-  }
-
-  request(method, params) {
-    return this.withTimeout(
-      this.connection.sendRequest(method, params),
-      `response to ${method}`,
-    );
-  }
-
-  notify(method, params) {
-    return this.withTimeout(
-      this.connection.sendNotification(method, params),
-      `delivery of ${method}`,
-    );
-  }
-
-  waitForNotification(method, predicate = () => true) {
-    const queuedIndex = this.queuedNotifications.findIndex(
-      (message) => message.method === method && predicate(message.params),
-    );
-    if (queuedIndex !== -1) {
-      const [message] = this.queuedNotifications.splice(queuedIndex, 1);
-      return Promise.resolve(message.params);
-    }
-
-    return new Promise((resolve, reject) => {
-      const waiter = {
-        method,
-        predicate,
-        resolve,
-        timer: undefined,
-      };
-      waiter.timer = setTimeout(() => {
-        const index = this.notificationWaiters.indexOf(waiter);
-        if (index !== -1) {
-          this.notificationWaiters.splice(index, 1);
-        }
-        reject(timeoutError(`${method} notification`, this.stderr));
-      }, requestTimeoutMilliseconds);
-      this.notificationWaiters.push(waiter);
-    });
-  }
-
-  waitForExit() {
-    return this.withTimeout(this.exit, "language server to exit").then(
-      ({ code, signal, error }) => {
-        if (error !== undefined) {
-          throw error;
-        }
-        return { code, signal };
-      },
-    );
-  }
-
-  withTimeout(promise, operation) {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(timeoutError(operation, this.stderr));
-      }, requestTimeoutMilliseconds);
-      promise.then(
-        (result) => {
-          clearTimeout(timer);
-          resolve(result);
-        },
-        (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      );
-    });
-  }
-
-  async dispose() {
-    this.connection.dispose();
-    for (const waiter of this.notificationWaiters) {
-      clearTimeout(waiter.timer);
-    }
-    this.notificationWaiters = [];
-
-    if (this.process.exitCode !== null || this.process.signalCode !== null) {
-      return;
-    }
-
-    this.process.kill();
-    try {
-      await this.waitForExit();
-    } catch {
-      if (this.process.exitCode === null && this.process.signalCode === null) {
-        this.process.kill("SIGKILL");
-      }
-    }
-  }
+  });
 }
 
-async function initialize(client, initializationOptions) {
-  const result = await client.request("initialize", {
-    processId: process.pid,
+async function initialize(connection, initializationOptions) {
+  const result = await connection.sendRequest("initialize", {
+    processId: null,
     rootUri: null,
-    capabilities: {},
+    capabilities: {
+      general: { positionEncodings: ["utf-16"] },
+    },
     initializationOptions,
   });
-  await client.notify("initialized", {});
+  connection.sendNotification("initialized", {});
   return result;
 }
 
-async function shutdown(client) {
-  assert.equal(await client.request("shutdown"), null);
-  await client.notify("exit");
-  assert.deepEqual(await client.waitForExit(), {
-    code: 0,
-    signal: null,
-  });
+async function stopServer(server) {
+  const exited =
+    server.child.exitCode === null
+      ? new Promise((resolve) => server.child.once("exit", resolve))
+      : Promise.resolve();
+  if (server.child.exitCode === null) {
+    try {
+      await server.connection.sendRequest("shutdown");
+      server.connection.sendNotification("exit");
+    } catch {
+      server.child.kill();
+    }
+  }
+  let timeout;
+  await Promise.race([
+    exited,
+    new Promise((resolve) => {
+      timeout = setTimeout(() => {
+        server.child.kill();
+        resolve();
+      }, 10_000);
+    }),
+  ]);
+  clearTimeout(timeout);
+  server.connection.dispose();
 }
 
-test("serves diagnostics, label navigation, and formatting through the LSP document lifecycle", async (t) => {
-  const client = new LspClient();
-  t.after(() => client.dispose());
+test("serves the complete document lifecycle over default stdio", async (t) => {
+  const server = startServer();
+  t.after(async () => stopServer(server));
+  const initialized = await initialize(server.connection, {});
+  assert.equal(initialized.capabilities.positionEncoding, "utf-16");
+  assert.deepEqual(initialized.capabilities.textDocumentSync, {
+    openClose: true,
+    change: 2,
+  });
+  assert.deepEqual(initialized.capabilities.renameProvider, {
+    prepareProvider: true,
+  });
 
-  const initializeResult = await initialize(client);
-  assert.deepEqual(initializeResult.capabilities, {
-    textDocumentSync: TextDocumentSyncKind.Incremental,
-    definitionProvider: true,
-    documentFormattingProvider: true,
-    referencesProvider: true,
-    renameProvider: {
-      prepareProvider: true,
+  const defaultModeUri = "file:///default-mode.sed";
+  const defaultModeDiagnostics = notification(
+    server.connection,
+    "textDocument/publishDiagnostics",
+    ({ uri: received }) => received === defaultModeUri,
+  );
+  server.connection.sendNotification("textDocument/didOpen", {
+    textDocument: {
+      uri: defaultModeUri,
+      languageId: "sed",
+      version: 1,
+      text: "/a\\?/p\n",
     },
+  });
+  assert.deepEqual(
+    (await defaultModeDiagnostics).diagnostics.map(({ code }) => code),
+    ["bre-question-mark-escape"],
+  );
+  server.connection.sendNotification("textDocument/didClose", {
+    textDocument: { uri: defaultModeUri },
   });
 
   const uri = "file:///integration.sed";
-  await client.notify("textDocument/didOpen", {
+  const source = "s//x/\n:target\nb target\np;p";
+  const opened = notification(
+    server.connection,
+    "textDocument/publishDiagnostics",
+    ({ uri: received, version }) => received === uri && version === 1,
+  );
+  server.connection.sendNotification("textDocument/didOpen", {
     textDocument: {
       uri,
       languageId: "sed",
       version: 1,
-      text: ":loop\ns/\\(foo\\)/\\1/g\nb loop\n{p;d;}\nz\n",
+      text: source,
     },
   });
+  const openDiagnostics = await opened;
+  assert.deepEqual(
+    openDiagnostics.diagnostics.map(({ code }) => code),
+    ["empty-regular-expression-without-previous"],
+  );
 
-  const openedDiagnostics = await client.waitForNotification(
+  assert.deepEqual(
+    await server.connection.sendRequest("textDocument/definition", {
+      textDocument: { uri },
+      position: { line: 2, character: 4 },
+    }),
+    [
+      {
+        uri,
+        range: {
+          start: { line: 1, character: 1 },
+          end: { line: 1, character: 7 },
+        },
+      },
+    ],
+  );
+  assert.deepEqual(
+    (
+      await server.connection.sendRequest("textDocument/references", {
+        textDocument: { uri },
+        position: { line: 1, character: 7 },
+        context: { includeDeclaration: true },
+      })
+    ).map(({ range }) => range.start),
+    [
+      { line: 1, character: 1 },
+      { line: 2, character: 2 },
+    ],
+  );
+  assert.deepEqual(
+    await server.connection.sendRequest("textDocument/prepareRename", {
+      textDocument: { uri },
+      position: { line: 2, character: 8 },
+    }),
+    {
+      range: {
+        start: { line: 2, character: 2 },
+        end: { line: 2, character: 8 },
+      },
+      placeholder: "target",
+    },
+  );
+  const renamed = await server.connection.sendRequest("textDocument/rename", {
+    textDocument: { uri },
+    position: { line: 2, character: 3 },
+    newName: "next",
+  });
+  assert.deepEqual(
+    renamed.changes[uri].map(({ newText, range }) => [newText, range.start]),
+    [
+      ["next", { line: 1, character: 1 }],
+      ["next", { line: 2, character: 2 }],
+    ],
+  );
+
+  const formatted = await server.connection.sendRequest(
+    "textDocument/formatting",
+    {
+      textDocument: { uri },
+      options: { tabSize: 2, insertSpaces: true },
+    },
+  );
+  assert.equal(formatted[0].newText, "s//x/\n:target\nb target\np\np\n");
+
+  const changed = notification(
+    server.connection,
     "textDocument/publishDiagnostics",
-    ({ uri: diagnosticUri, version }) => diagnosticUri === uri && version === 1,
+    ({ uri: received, version }) => received === uri && version === 2,
   );
-  assert.deepEqual(openedDiagnostics.diagnostics, []);
-
-  assert.deepEqual(
-    await client.request("textDocument/definition", {
-      textDocument: { uri },
-      position: { line: 2, character: 4 },
-    }),
-    [
-      {
-        uri,
-        range: {
-          start: { line: 0, character: 1 },
-          end: { line: 0, character: 5 },
-        },
-      },
-    ],
-  );
-
-  assert.deepEqual(
-    await client.request("textDocument/references", {
-      textDocument: { uri },
-      position: { line: 2, character: 4 },
-      context: {
-        includeDeclaration: true,
-      },
-    }),
-    [
-      {
-        uri,
-        range: {
-          start: { line: 0, character: 1 },
-          end: { line: 0, character: 5 },
-        },
-      },
-      {
-        uri,
-        range: {
-          start: { line: 2, character: 2 },
-          end: { line: 2, character: 6 },
-        },
-      },
-    ],
-  );
-
-  assert.deepEqual(
-    await client.request("textDocument/prepareRename", {
-      textDocument: { uri },
-      position: { line: 0, character: 3 },
-    }),
-    {
-      start: { line: 0, character: 1 },
-      end: { line: 0, character: 5 },
-    },
-  );
-
-  assert.deepEqual(
-    await client.request("textDocument/rename", {
-      textDocument: { uri },
-      position: { line: 2, character: 4 },
-      newName: "again",
-    }),
-    {
-      changes: {
-        [uri]: [
-          {
-            range: {
-              start: { line: 0, character: 1 },
-              end: { line: 0, character: 5 },
-            },
-            newText: "again",
-          },
-          {
-            range: {
-              start: { line: 2, character: 2 },
-              end: { line: 2, character: 6 },
-            },
-            newText: "again",
-          },
-        ],
-      },
-    },
-  );
-
-  await client.notify("textDocument/didChange", {
+  server.connection.sendNotification("textDocument/didChange", {
     textDocument: { uri, version: 2 },
     contentChanges: [
       {
         range: {
-          start: { line: 4, character: 0 },
-          end: { line: 4, character: 1 },
+          start: { line: 0, character: 2 },
+          end: { line: 0, character: 2 },
         },
-        text: "p",
+        text: "a",
       },
     ],
   });
+  assert.deepEqual((await changed).diagnostics, []);
 
-  const changedDiagnostics = await client.waitForNotification(
+  const closed = notification(
+    server.connection,
     "textDocument/publishDiagnostics",
-    ({ uri: diagnosticUri, version }) => diagnosticUri === uri && version === 2,
+    ({ uri: received, diagnostics: values }) =>
+      received === uri && values.length === 0,
   );
-  assert.deepEqual(changedDiagnostics.diagnostics, []);
-
-  assert.deepEqual(
-    await client.request("textDocument/formatting", {
-      textDocument: { uri },
-      options: {
-        tabSize: 2,
-        insertSpaces: true,
-      },
-    }),
-    [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 5, character: 0 },
-        },
-        newText: ":loop\ns/\\(foo\\)/\\1/g\nb loop\n{\n  p\n  d\n}\np\n",
-      },
-    ],
-  );
-
-  await client.notify("textDocument/didClose", {
+  server.connection.sendNotification("textDocument/didClose", {
     textDocument: { uri },
   });
-  assert.deepEqual(
-    await client.waitForNotification(
-      "textDocument/publishDiagnostics",
-      ({ uri: diagnosticUri, diagnostics }) =>
-        diagnosticUri === uri && diagnostics.length === 0,
-    ),
-    {
-      uri,
-      diagnostics: [],
-    },
-  );
-
-  await shutdown(client);
+  assert.equal((await closed).version, 2);
+  assert.equal(server.stderr(), "");
 });
 
-test("defaults an explicit POSIX dialect to BRE", async (t) => {
-  const client = new LspClient();
-  t.after(() => client.dispose());
-
-  await initialize(client, { dialect: "posix" });
-
-  const uri = "file:///explicit-posix-bre.sed";
-  await client.notify("textDocument/didOpen", {
+test("uses the fixed ERE grammar selected during initialization", async (t) => {
+  const server = startServer();
+  t.after(async () => stopServer(server));
+  await initialize(server.connection, { regex: "ere" });
+  const uri = "file:///ere.sed";
+  const published = notification(
+    server.connection,
+    "textDocument/publishDiagnostics",
+    ({ uri: received }) => received === uri,
+  );
+  server.connection.sendNotification("textDocument/didOpen", {
     textDocument: {
       uri,
       languageId: "sed",
       version: 1,
-      text: "z\n",
+      text: "s/(a)/\\1/\n",
     },
   });
-
-  const diagnostics = await client.waitForNotification(
-    "textDocument/publishDiagnostics",
-    ({ uri: diagnosticUri }) => diagnosticUri === uri,
-  );
-  assert.deepEqual(diagnostics.diagnostics, [
-    {
-      severity: DiagnosticSeverity.Error,
-      range: {
-        start: { line: 0, character: 0 },
-        end: { line: 0, character: 1 },
-      },
-      message: "Unknown sed command: `z`.",
-      code: "invalid-command",
-      source: "sed-language-server",
-    },
-  ]);
-
-  await shutdown(client);
+  assert.deepEqual((await published).diagnostics, []);
+  assert.equal(server.stderr(), "");
 });
 
-test("uses canonical GNU BRE for null and empty initialization options", async (t) => {
-  for (const [name, initializationOptions] of [
-    ["null", null],
-    ["empty", {}],
-  ]) {
-    await t.test(name, async (t) => {
-      const client = new LspClient();
-      t.after(() => client.dispose());
-
-      await initialize(client, initializationOptions);
-
-      const uri = `file:///${name}-options.sed`;
-      await client.notify("textDocument/didOpen", {
-        textDocument: {
-          uri,
-          languageId: "sed",
-          version: 1,
-          text: "z\ns/\\(a\\)/\\1/\n",
-        },
-      });
-      const diagnostics = await client.waitForNotification(
-        "textDocument/publishDiagnostics",
-        ({ uri: diagnosticUri }) => diagnosticUri === uri,
-      );
-      assert.deepEqual(diagnostics.diagnostics, []);
-
-      await shutdown(client);
-    });
-  }
-});
-
-test("rejects an invalid sed dialect initialization option", async (t) => {
-  const client = new LspClient();
-  t.after(() => client.dispose());
-
+test("rejects unknown initialization options", async (t) => {
+  const server = startServer();
+  t.after(async () => stopServer(server));
   await assert.rejects(
-    client.request("initialize", {
-      processId: process.pid,
+    server.connection.sendRequest("initialize", {
+      processId: null,
       rootUri: null,
       capabilities: {},
-      initializationOptions: {
-        dialect: "bsd",
-      },
+      initializationOptions: { dialect: "other" },
     }),
-    (error) => {
-      assert.equal(error.code, ErrorCodes.InvalidParams);
-      assert.match(error.message, /dialect/);
-      return true;
-    },
+    (error) =>
+      error.code === -32602 &&
+      /only supported initialization option/.test(error.message),
   );
 });
 
-test("rejects an invalid regular expression initialization option", async (t) => {
-  const client = new LspClient();
-  t.after(() => client.dispose());
-
+test("rejects a non-string regular expression mode", async (t) => {
+  const server = startServer();
+  t.after(async () => stopServer(server));
   await assert.rejects(
-    client.request("initialize", {
-      processId: process.pid,
+    server.connection.sendRequest("initialize", {
+      processId: null,
       rootUri: null,
       capabilities: {},
-      initializationOptions: {
-        regex: "pcre",
-      },
+      initializationOptions: { regex: null },
     }),
-    (error) => {
-      assert.equal(error.code, ErrorCodes.InvalidParams);
-      assert.match(error.message, /regular expression/);
-      return true;
-    },
+    (error) =>
+      error.code === -32602 &&
+      /initializationOptions\.regex must be/.test(error.message),
   );
-});
-
-test("defaults an explicit ERE mode to GNU and keeps both syntax axes fixed", async (t) => {
-  const client = new LspClient();
-  t.after(() => client.dispose());
-
-  await initialize(client, { regex: "ere" });
-  await client.notify("workspace/didChangeConfiguration", {
-    settings: {
-      sedLanguageServer: {
-        dialect: "posix",
-        regex: "bre",
-      },
-    },
-  });
-
-  const uri = "file:///fixed-dialect.sed";
-  await client.notify("textDocument/didOpen", {
-    textDocument: {
-      uri,
-      languageId: "sed",
-      version: 1,
-      text: "z\ns/(a)/\\1/\n",
-    },
-  });
-  const diagnostics = await client.waitForNotification(
-    "textDocument/publishDiagnostics",
-    ({ uri: diagnosticUri }) => diagnosticUri === uri,
-  );
-  assert.deepEqual(diagnostics.diagnostics, []);
-
-  await shutdown(client);
 });

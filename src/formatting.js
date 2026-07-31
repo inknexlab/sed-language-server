@@ -1,172 +1,145 @@
-import { collectSyntaxIssueNodes, syntaxTreeFor } from "./syntax.js";
+import { functionForCommand, nativeIssues, structuredIssues } from "./cst.js";
 
-const maximumFormattingBlockDepth = 256;
-
-function lineEndingCount(source) {
-  return source.split("\n").length - 1;
+function indentation(options) {
+  if (options?.insertSpaces === false) {
+    return "\t";
+  }
+  const requested = Number(options?.tabSize);
+  const width = Number.isInteger(requested) && requested > 0 ? requested : 2;
+  return " ".repeat(width);
 }
 
-function formatCommandList(
-  node,
-  source,
-  indentation,
-  lineEnding,
-  depth,
-  {
-    minimumLeadingLineEndings = 0,
-    minimumTrailingLineEndings = 0,
-    preserveSilentCommentPrefix = false,
-  } = {},
-) {
-  const commands = node.children.filter((child) => child.type === "command");
-  if (commands.length === 0) {
-    const count = Math.max(
-      lineEndingCount(node.text),
-      minimumLeadingLineEndings,
-      minimumTrailingLineEndings,
-    );
-    return lineEnding.repeat(count);
-  }
-
-  const first = commands[0];
-  const leadingSource = source.slice(node.startIndex, first.startIndex);
-  const leadingCount = lineEndingCount(leadingSource);
-  let formatted = lineEnding.repeat(
-    Math.max(leadingCount, minimumLeadingLineEndings),
-  );
-  if (
-    preserveSilentCommentPrefix &&
-    leadingCount === 0 &&
-    first.text.startsWith("#n")
-  ) {
-    formatted += leadingSource;
-  }
-
-  for (const [index, command] of commands.entries()) {
-    if (index > 0) {
-      const previous = commands[index - 1];
-      const separatorSource = source.slice(
-        previous.endIndex,
-        command.startIndex,
-      );
-      formatted += lineEnding.repeat(
-        Math.max(1, lineEndingCount(separatorSource)),
-      );
-    }
-    formatted += formatCommand(command, source, indentation, lineEnding, depth);
-  }
-
-  const last = commands.at(-1);
-  const trailingSource = source.slice(last.endIndex, node.endIndex);
-  formatted += lineEnding.repeat(
-    Math.max(lineEndingCount(trailingSource), minimumTrailingLineEndings),
-  );
-  return formatted;
-}
-
-function formatCommand(command, source, indentation, lineEnding, depth) {
-  const prefix = indentation.repeat(depth);
-  const body = command.childForFieldName("body");
-  if (body.type !== "block_command") {
-    return `${prefix}${command.text}`;
-  }
-
-  const openingBrace = body.childForFieldName("name");
-  const opening = command.text.slice(
-    0,
-    openingBrace.endIndex - command.startIndex,
-  );
-  const commandList = body.childForFieldName("argument");
-  if (commandList === null) {
-    return `${prefix}${opening}}`;
-  }
-
-  const formattedCommands = formatCommandList(
-    commandList,
-    source,
-    indentation,
-    lineEnding,
-    depth + 1,
-    {
-      minimumLeadingLineEndings: 1,
-      minimumTrailingLineEndings: 1,
-    },
-  );
-
-  return `${prefix}${opening}${formattedCommands}${prefix}}`;
-}
-
-function indentationFor(options) {
-  return options.insertSpaces ? " ".repeat(options.tabSize) : "\t";
-}
-
-function hasExcessiveBlockNesting(rootNode) {
-  const stack = [{ node: rootNode, depth: 0 }];
-
-  while (stack.length > 0) {
-    const { node, depth } = stack.pop();
-    const childDepth = depth + (node.type === "block_command" ? 1 : 0);
-    if (childDepth > maximumFormattingBlockDepth) {
-      return true;
-    }
-    for (let index = 0; index < node.namedChildCount; index += 1) {
-      const child = node.namedChild(index);
-      if (child !== null) {
-        stack.push({ node: child, depth: childDepth });
-      }
-    }
-  }
-
-  return false;
-}
-
-function formatScript(rootNode, source, options) {
-  const newlineIndex = source.indexOf("\n");
-  const lineEnding =
-    newlineIndex > 0 && source[newlineIndex - 1] === "\r" ? "\r\n" : "\n";
-  const indentation = indentationFor(options);
-  const firstLine = rootNode.children.find(
-    (child) => child.type === "first_line_silent",
-  );
-  const commandList = rootNode.children.find(
-    (child) => child.type === "command_list",
-  );
-  const firstLineText = firstLine?.text ?? "";
-  if (commandList === undefined) {
-    return firstLineText;
-  }
-
+function structuralStart(command) {
   return (
-    firstLineText +
-    formatCommandList(commandList, source, indentation, lineEnding, 0, {
-      preserveSilentCommentPrefix: firstLine === undefined,
-    })
+    command.namedChildren.find(
+      ({ type }) =>
+        type === "address_clause" || type === "negation" || type === "function",
+    )?.startIndex ?? command.startIndex
   );
 }
 
-export function createFormattingEdits(document, syntax, options) {
-  const source = document.getText();
-  const rootNode = syntaxTreeFor(document, syntax).rootNode;
-  if (
-    rootNode.hasError ||
-    hasExcessiveBlockNesting(rootNode) ||
-    collectSyntaxIssueNodes(rootNode).length > 0
-  ) {
-    return [];
+function emptySeparator(emptyCommand) {
+  return emptyCommand.namedChildren.find(
+    ({ type }) => type === "command_separator",
+  );
+}
+
+function renderCommand(document, command, depth, indent) {
+  const prefix = indent.repeat(depth);
+  const functionNode = functionForCommand(command);
+  if (functionNode?.type !== "block_function") {
+    return (
+      prefix +
+      document.getText({
+        start: document.positionAt(structuralStart(command)),
+        end: document.positionAt(command.endIndex),
+      })
+    );
   }
 
-  const formatted = formatScript(rootNode, source, options);
-  if (!source.startsWith("#n") && formatted.startsWith("#n")) {
+  const verb = functionNode.childForFieldName("verb");
+  const commands = functionNode.childForFieldName("commands");
+  const closing = functionNode.childForFieldName("closing");
+  if (verb === null || commands === null || closing === null) {
+    return undefined;
+  }
+  const opening = document.getText({
+    start: document.positionAt(structuralStart(command)),
+    end: document.positionAt(verb.endIndex),
+  });
+  const nested = renderCommandList(document, commands, depth + 1, indent, true);
+  const closingText = document.getText({
+    start: document.positionAt(closing.startIndex),
+    end: document.positionAt(closing.endIndex),
+  });
+  return [`${prefix}${opening}`, ...nested, `${prefix}${closingText}`].join(
+    "\n",
+  );
+}
+
+function renderCommandList(document, commandList, depth, indent, nested) {
+  const rendered = [];
+  let skippedOpeningNewline = !nested;
+  let awaitingCommandNewline = false;
+  for (const child of commandList.namedChildren) {
+    if (child.type === "editing_command") {
+      const command = renderCommand(document, child, depth, indent);
+      if (command !== undefined) {
+        rendered.push(command);
+        awaitingCommandNewline = true;
+        skippedOpeningNewline = true;
+      }
+      continue;
+    }
+    const separator =
+      child.type === "command_separator"
+        ? child
+        : child.type === "empty_command"
+          ? emptySeparator(child)
+          : undefined;
+    if (separator === undefined) {
+      continue;
+    }
+    const text = document.getText({
+      start: document.positionAt(separator.startIndex),
+      end: document.positionAt(separator.endIndex),
+    });
+    if (text !== "\n") {
+      continue;
+    }
+    if (awaitingCommandNewline) {
+      awaitingCommandNewline = false;
+      continue;
+    }
+    if (!skippedOpeningNewline) {
+      skippedOpeningNewline = true;
+      continue;
+    }
+    rendered.push("");
+  }
+  return rendered;
+}
+
+function canFormat(root) {
+  if (nativeIssues(root).length > 0) {
+    return false;
+  }
+  return structuredIssues(root).every(
+    ({ outcome }) =>
+      outcome !== "incomplete_syntax" && outcome !== "nonconforming_syntax",
+  );
+}
+
+export function formattingEdits(snapshot, options) {
+  const { document, tree } = snapshot;
+  if (!canFormat(tree.rootNode)) {
     return [];
+  }
+  const commandList = tree.rootNode.namedChildren.find(
+    ({ type }) => type === "command_list",
+  );
+  const rendered =
+    commandList === undefined
+      ? []
+      : renderCommandList(
+          document,
+          commandList,
+          0,
+          indentation(options),
+          false,
+        );
+  let formatted = `${rendered.join("\n")}\n`;
+  const source = document.getText();
+  if (!source.startsWith("#n") && formatted.startsWith("#n")) {
+    formatted = ` ${formatted}`;
   }
   if (formatted === source) {
     return [];
   }
-
   return [
     {
       range: {
-        start: document.positionAt(0),
+        start: { line: 0, character: 0 },
         end: document.positionAt(source.length),
       },
       newText: formatted,

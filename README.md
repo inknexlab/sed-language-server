@@ -14,11 +14,11 @@ npm install --global @inknexlab/sed-language-server
 
 ## Features
 
-- Definition
 - Diagnostics
-- Formatting
-- References
-- Rename
+- Document Formatting
+- FindReferences
+- Go to Definition
+- Rename labels
 
 ## Emacs
 

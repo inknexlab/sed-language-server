@@ -1,9 +1,9 @@
 {
-  "revision": "fe85f809435c35a4e9fc01b8dccbcdda3678d583",
+  "revision": "72a635ebbe218847a3ff05431d86dba698579944",
   "languages": {
     "bre": {
       "language": "posix_sed_bre",
-      "wasm": "tree-sitter-sed-posix-bre.wasm",
+      "wasm": "tree-sitter-posix-sed-bre.wasm",
       "outcomes": {
         "implementation_defined_syntax": [
           "bre_plus_escape",
@@ -81,7 +81,7 @@
     },
     "ere": {
       "language": "posix_sed_ere",
-      "wasm": "tree-sitter-sed-posix-ere.wasm",
+      "wasm": "tree-sitter-posix-sed-ere.wasm",
       "outcomes": {
         "implementation_option_syntax": ["omitted_file_separator"],
         "incomplete_syntax": [

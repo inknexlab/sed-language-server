@@ -5,7 +5,7 @@ import { Language, Parser } from "web-tree-sitter";
 
 const vendorDirectory = new URL("../vendor/", import.meta.url);
 const manifest = JSON.parse(
-  readFileSync(new URL("tree-sitter-sed.json", vendorDirectory), "utf8"),
+  readFileSync(new URL("tree-sitter-posix-sed.json", vendorDirectory), "utf8"),
 );
 const modes = Object.freeze(Object.keys(manifest.languages));
 let parserInitialization;

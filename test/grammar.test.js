@@ -11,7 +11,7 @@ test("loads exactly the pinned POSIX BRE and ERE grammars", async (t) => {
   assert.deepEqual(regularExpressionModes(), ["bre", "ere"]);
   assert.equal(
     grammarManifest().revision,
-    "fe85f809435c35a4e9fc01b8dccbcdda3678d583",
+    "72a635ebbe218847a3ff05431d86dba698579944",
   );
 
   for (const mode of regularExpressionModes()) {

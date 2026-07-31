@@ -1,178 +1,83 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { createFormattingEdits } from "../src/formatting.js";
+import { formattingEdits } from "../src/formatting.js";
+import { SyntaxStore } from "../src/syntax.js";
+import { documentFor } from "./support.js";
 
-const posixBre = { dialect: "posix", regex: "bre" };
-const gnuBre = { dialect: "gnu", regex: "bre" };
-const gnuEre = { dialect: "gnu", regex: "ere" };
-const spaces = { tabSize: 2, insertSpaces: true };
-
-function documentFor(source) {
-  return TextDocument.create("file:///formatting.sed", "sed", 1, source);
+async function format(source, mode = "bre", options = {}) {
+  const store = await SyntaxStore.create(mode);
+  try {
+    const snapshot = store.open(documentFor(source));
+    const edits = formattingEdits(snapshot, options);
+    return {
+      edits,
+      text:
+        edits.length === 0
+          ? source
+          : TextDocument.applyEdits(snapshot.document, edits),
+    };
+  } finally {
+    store.dispose();
+  }
 }
 
-test("formats command separators and nested blocks without changing command content", () => {
-  const source = "{s/a;b/c/g;p;{x;d}}\n";
-  const expected = "{\n  s/a;b/c/g\n  p\n  {\n    x\n    d\n  }\n}\n";
-
-  assert.deepEqual(createFormattingEdits(documentFor(source), gnuBre, spaces), [
-    {
-      range: {
-        start: { line: 0, character: 0 },
-        end: { line: 1, character: 0 },
-      },
-      newText: expected,
-    },
-  ]);
-  assert.deepEqual(
-    createFormattingEdits(documentFor(expected), gnuBre, spaces),
-    [],
-  );
+test("puts each command on a line and indents nested blocks", async () => {
+  const source = "  1,2{;p;s/a/b/g;\n\n};q;p";
+  const { text } = await format(source, "bre", {
+    insertSpaces: true,
+    tabSize: 2,
+  });
+  assert.equal(text, "1,2{\n  p\n  s/a/b/g\n\n}\nq\np\n");
 });
 
-test("formats a script containing ERE operators", () => {
-  assert.deepEqual(
-    createFormattingEdits(documentFor("{s/(a)+/\\1/;p}\n"), gnuEre, spaces),
-    [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 1, character: 0 },
-        },
-        newText: "{\n  s/(a)+/\\1/\n  p\n}\n",
-      },
-    ],
-  );
+test("uses tabs when the client requests tab indentation", async () => {
+  const { text } = await format("{\n{\np\n}\n}\n", "ere", {
+    insertSpaces: false,
+    tabSize: 8,
+  });
+  assert.equal(text, "{\n\t{\n\t\tp\n\t}\n}\n");
 });
 
-test("uses client indentation and preserves multiline command arguments and CRLF", () => {
-  const source = "{\r\n  a\\\r\n  keep  \r\n  p\r\n}\r\n";
-
-  assert.deepEqual(
-    createFormattingEdits(documentFor(source), posixBre, {
-      tabSize: 8,
-      insertSpaces: false,
-    }),
-    [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 5, character: 0 },
-        },
-        newText: "{\r\n\ta\\\r\n  keep  \r\n\tp\r\n}\r\n",
-      },
-    ],
-  );
+test("preserves leading, interior, and trailing blank lines", async () => {
+  const { text } = await format("\n\n p\n\n{\n\nq\n\n}\n\n");
+  assert.equal(text, "\n\np\n\n{\n\n  q\n\n}\n\n");
 });
 
-test("does not format scripts with exposed or hidden syntax errors", () => {
-  assert.deepEqual(
-    createFormattingEdits(documentFor("1,\n"), posixBre, spaces),
-    [],
-  );
-  assert.deepEqual(
-    createFormattingEdits(documentFor("d;a"), gnuBre, spaces),
-    [],
-  );
+test("does not rewrite multiline text payloads", async () => {
+  const source = "  a\\\n  first\\\n second\n p";
+  const { text } = await format(source);
+  assert.equal(text, "a\\\n  first\\\n second\np\n");
 });
 
-test("preserves first-line #n output suppression semantics", () => {
-  assert.deepEqual(
-    createFormattingEdits(documentFor("\n#n\n{p;d;}\n"), posixBre, spaces),
-    [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 3, character: 0 },
-        },
-        newText: "\n#n\n{\n  p\n  d\n}\n",
-      },
-    ],
-  );
-  assert.deepEqual(
-    createFormattingEdits(documentFor(" #n\n{p;d;}\n"), posixBre, spaces),
-    [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 2, character: 0 },
-        },
-        newText: " #n\n{\n  p\n  d\n}\n",
-      },
-    ],
-  );
-  assert.deepEqual(
-    createFormattingEdits(documentFor("#n\n{p;d;}\n"), posixBre, spaces),
-    [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 2, character: 0 },
-        },
-        newText: "#n\n{\n  p\n  d\n}\n",
-      },
-    ],
-  );
+test("does not rewrite escaped newlines inside a replacement", async () => {
+  const source = " s/a/first\\\n second/;p";
+  const { text } = await format(source);
+  assert.equal(text, "s/a/first\\\n second/\np\n");
 });
 
-test("preserves blank lines while formatting commands", () => {
-  const source = "{\n\np\n\n# section\n\nd\n\n}\n";
-  const expected = "{\n\n  p\n\n  # section\n\n  d\n\n}\n";
-
-  assert.deepEqual(
-    createFormattingEdits(documentFor(source), posixBre, spaces),
-    [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 9, character: 0 },
-        },
-        newText: expected,
-      },
-    ],
-  );
-  assert.deepEqual(
-    createFormattingEdits(documentFor(expected), posixBre, spaces),
-    [],
-  );
+test("preserves the special meaning of an initial #n comment", async () => {
+  assert.equal((await format("#n\n p;p")).text, "#n\np\np\n");
+  assert.equal((await format(";#n\np")).text, " #n\np\n");
 });
 
-test("keeps a separator when formatting an empty block", () => {
-  assert.deepEqual(
-    createFormattingEdits(documentFor("{;}\n"), posixBre, spaces),
-    [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 1, character: 0 },
-        },
-        newText: "{\n}\n",
-      },
-    ],
-  );
+test("formats warning-bearing syntax but not structural errors", async () => {
+  assert.equal((await format("/a**/p;p")).text, "/a**/p\np\n");
+  for (const source of ["r\n", "p tail\n", "\0"]) {
+    const result = await format(source);
+    assert.deepEqual(result.edits, [], JSON.stringify(source));
+    assert.equal(result.text, source);
+  }
 });
 
-test("formats a compact GNU label before a closing brace", () => {
-  assert.deepEqual(
-    createFormattingEdits(documentFor("{:target}\n"), gnuBre, spaces),
-    [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 1, character: 0 },
-        },
-        newText: "{\n  :target\n}\n",
-      },
-    ],
-  );
-});
-
-test("declines excessively nested blocks without overflowing", () => {
-  const source = `${"{".repeat(2000)}p${"}".repeat(2000)}`;
-
-  assert.deepEqual(
-    createFormattingEdits(documentFor(source), gnuBre, spaces),
-    [],
-  );
+test("is idempotent in both regular-expression modes", async () => {
+  const source = "1,2{\n  p\n\n  s/a/b/g\n}\n";
+  for (const mode of ["bre", "ere"]) {
+    const first = await format(source, mode, {
+      insertSpaces: true,
+      tabSize: 2,
+    });
+    assert.equal(first.text, source);
+    assert.deepEqual(first.edits, []);
+  }
 });

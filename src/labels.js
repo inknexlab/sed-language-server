@@ -1,41 +1,104 @@
-import { syntaxTreeFor } from "./syntax.js";
+import { labelSymbols, rangeForNode } from "./cst.js";
 
-const labelNodeTypes = ["label_definition", "label_reference"];
+export class RenameError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "RenameError";
+  }
+}
 
-function labelAt(rootNode, offset) {
-  let node = rootNode.namedDescendantForIndex(offset);
-  while (node !== null) {
-    if (
-      labelNodeTypes.includes(node.type) &&
-      node.startIndex <= offset &&
-      offset < node.endIndex
-    ) {
-      return node;
-    }
-    node = node.parent;
+function symbolsFor(snapshot) {
+  return labelSymbols(snapshot.document, snapshot.tree.rootNode);
+}
+
+function symbolAt(document, symbols, position) {
+  const offset = document.offsetAt(position);
+  return symbols.find(
+    ({ node }) => node.startIndex <= offset && offset <= node.endIndex,
+  );
+}
+
+function location(snapshot, symbol) {
+  return {
+    uri: snapshot.document.uri,
+    range: rangeForNode(snapshot.document, symbol.node),
+  };
+}
+
+function invalidRename(name) {
+  if (name.length === 0) {
+    return "A label cannot be empty.";
+  }
+  if (name.includes("\0") || name.includes("\r") || name.includes("\n")) {
+    return "A label cannot contain NUL, carriage return, or newline.";
+  }
+  if (name.startsWith(" ") || name.startsWith("\t")) {
+    return "A label cannot begin with a blank character.";
   }
   return undefined;
 }
 
-export function labelAtPosition(document, position, syntax) {
-  const rootNode = syntaxTreeFor(document, syntax).rootNode;
-  const offset = document.offsetAt(position);
-  const node =
-    labelAt(rootNode, offset) ??
-    (offset === 0 ? undefined : labelAt(rootNode, offset - 1));
+export function definitions(snapshot, position) {
+  const symbols = symbolsFor(snapshot);
+  const selected = symbolAt(snapshot.document, symbols, position);
+  if (selected === undefined) {
+    return [];
+  }
+  return symbols
+    .filter(({ kind, name }) => kind === "definition" && name === selected.name)
+    .map((symbol) => location(snapshot, symbol));
+}
 
-  if (node === undefined) {
+export function references(snapshot, position, includeDeclaration) {
+  const symbols = symbolsFor(snapshot);
+  const selected = symbolAt(snapshot.document, symbols, position);
+  if (selected === undefined) {
+    return [];
+  }
+  return symbols
+    .filter(
+      ({ kind, name }) =>
+        name === selected.name && (kind === "reference" || includeDeclaration),
+    )
+    .map((symbol) => location(snapshot, symbol));
+}
+
+export function prepareRename(snapshot, position) {
+  const symbols = symbolsFor(snapshot);
+  const selected = symbolAt(snapshot.document, symbols, position);
+  if (selected === undefined) {
     return undefined;
   }
-
   return {
-    node,
-    rootNode,
+    range: rangeForNode(snapshot.document, selected.node),
+    placeholder: selected.name,
   };
 }
 
-export function matchingLabels(rootNode, label, types = labelNodeTypes) {
-  return rootNode
-    .descendantsOfType(types)
-    .filter((node) => node.text === label.text);
+export function rename(snapshot, position, newName) {
+  const symbols = symbolsFor(snapshot);
+  const selected = symbolAt(snapshot.document, symbols, position);
+  if (selected === undefined) {
+    throw new RenameError("The position is not on a sed label.");
+  }
+  const invalid = invalidRename(newName);
+  if (invalid !== undefined) {
+    throw new RenameError(invalid);
+  }
+  if (
+    newName !== selected.name &&
+    symbols.some(({ kind, name }) => kind === "definition" && name === newName)
+  ) {
+    throw new RenameError(`Label '${newName}' is already defined.`);
+  }
+  return {
+    changes: {
+      [snapshot.document.uri]: symbols
+        .filter(({ name }) => name === selected.name)
+        .map((symbol) => ({
+          range: rangeForNode(snapshot.document, symbol.node),
+          newText: newName,
+        })),
+    },
+  };
 }

@@ -1,7 +1,7 @@
 {
   "name": "@inknexlab/sed-language-server",
-  "version": "0.3.2",
-  "description": "Language server for POSIX and GNU sed with BRE and ERE support.",
+  "version": "0.4.0",
+  "description": "Language server for POSIX.1-2024 sed syntax with BRE and ERE support.",
   "keywords": [
     "sed",
     "language-server",

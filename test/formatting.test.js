@@ -56,18 +56,45 @@ test("does not rewrite escaped newlines inside a replacement", async () => {
   assert.equal(text, "s/a/first\\\n second/\np\n");
 });
 
+test("preserves regular expression, translation, and line operands", async () => {
+  const source =
+    " s界a界b界;p\ny|a\\n\\||b\\\\c|;p\n:label\nb label\nr file name\n# comment ; untouched\np";
+  const { text } = await format(source);
+  assert.equal(
+    text,
+    "s界a界b界\np\ny|a\\n\\||b\\\\c|\np\n:label\nb label\nr file name\n# comment ; untouched\np\n",
+  );
+});
+
 test("preserves the special meaning of an initial #n comment", async () => {
   assert.equal((await format("#n\n p;p")).text, "#n\np\np\n");
   assert.equal((await format(";#n\np")).text, " #n\np\n");
+  assert.equal((await format("{;#n\np\n}")).text, "{\n  #n\n  p\n}\n");
 });
 
-test("formats warning-bearing syntax but not structural errors", async () => {
-  assert.equal((await format("/a**/p;p")).text, "/a**/p\np\n");
-  for (const source of ["r\n", "p tail\n", "\0"]) {
+test("formats POSIX-permitted implementation variations", async () => {
+  assert.equal((await format("/a\\+b/p;p")).text, "/a\\+b/p\np\n");
+  assert.equal((await format("rfile\np;p")).text, "rfile\np\np\n");
+});
+
+test("does not format syntax with unsafe POSIX outcomes", async () => {
+  for (const source of ["r\n", "p tail\n", "/a**/p;p", "1! p;p", "\0"]) {
     const result = await format(source);
     assert.deepEqual(result.edits, [], JSON.stringify(source));
     assert.equal(result.text, source);
   }
+});
+
+test("adds a final POSIX newline", async () => {
+  assert.equal((await format("p")).text, "p\n");
+  assert.deepEqual((await format("p\n")).edits, []);
+});
+
+test("does not rewrite CRLF input", async () => {
+  const source = "p\r\nq\r\n";
+  const result = await format(source);
+  assert.deepEqual(result.edits, []);
+  assert.equal(result.text, source);
 });
 
 test("is idempotent in both regular-expression modes", async () => {

@@ -46,10 +46,11 @@ server entry:
 
 The selected regular expression mode remains fixed for the server process.
 
-## Diagnostics
+## Implementation
 
-Reports POSIX syntax and static semantic issues using the
-[tree-sitter-posix-sed](https://github.com/inknexlab/tree-sitter-posix-sed) CST.
+Uses the POSIX CST from
+[tree-sitter-posix-sed](https://github.com/inknexlab/tree-sitter-posix-sed) for
+parsing.
 
 ## License
 

@@ -1,5 +1,10 @@
 import { functionForCommand, nativeIssues, structuredIssues } from "./cst.js";
 
+const formattableOutcomes = new Set([
+  "implementation_defined_syntax",
+  "implementation_option_syntax",
+]);
+
 function indentation(options) {
   if (options?.insertSpaces === false) {
     return "\t";
@@ -7,6 +12,13 @@ function indentation(options) {
   const requested = Number(options?.tabSize);
   const width = Number.isInteger(requested) && requested > 0 ? requested : 2;
   return " ".repeat(width);
+}
+
+function textBetween(document, startIndex, endIndex) {
+  return document.getText({
+    start: document.positionAt(startIndex),
+    end: document.positionAt(endIndex),
+  });
 }
 
 function structuralStart(command) {
@@ -29,11 +41,7 @@ function renderCommand(document, command, depth, indent) {
   const functionNode = functionForCommand(command);
   if (functionNode?.type !== "block_function") {
     return (
-      prefix +
-      document.getText({
-        start: document.positionAt(structuralStart(command)),
-        end: document.positionAt(command.endIndex),
-      })
+      prefix + textBetween(document, structuralStart(command), command.endIndex)
     );
   }
 
@@ -43,15 +51,17 @@ function renderCommand(document, command, depth, indent) {
   if (verb === null || commands === null || closing === null) {
     return undefined;
   }
-  const opening = document.getText({
-    start: document.positionAt(structuralStart(command)),
-    end: document.positionAt(verb.endIndex),
-  });
+  const opening = textBetween(
+    document,
+    structuralStart(command),
+    verb.endIndex,
+  );
   const nested = renderCommandList(document, commands, depth + 1, indent, true);
-  const closingText = document.getText({
-    start: document.positionAt(closing.startIndex),
-    end: document.positionAt(closing.endIndex),
-  });
+  const closingText = textBetween(
+    document,
+    closing.startIndex,
+    closing.endIndex,
+  );
   return [`${prefix}${opening}`, ...nested, `${prefix}${closingText}`].join(
     "\n",
   );
@@ -80,10 +90,11 @@ function renderCommandList(document, commandList, depth, indent, nested) {
     if (separator === undefined) {
       continue;
     }
-    const text = document.getText({
-      start: document.positionAt(separator.startIndex),
-      end: document.positionAt(separator.endIndex),
-    });
+    const text = textBetween(
+      document,
+      separator.startIndex,
+      separator.endIndex,
+    );
     if (text !== "\n") {
       continue;
     }
@@ -101,13 +112,19 @@ function renderCommandList(document, commandList, depth, indent, nested) {
 }
 
 function canFormat(root) {
-  if (nativeIssues(root).length > 0) {
-    return false;
-  }
-  return structuredIssues(root).every(
-    ({ outcome }) =>
-      outcome !== "incomplete_syntax" && outcome !== "nonconforming_syntax",
+  return (
+    nativeIssues(root).length === 0 &&
+    structuredIssues(root).every(({ outcome }) =>
+      formattableOutcomes.has(outcome),
+    )
   );
+}
+
+function preserveInitialNoDefaultOutput(source, formatted) {
+  if (!source.startsWith("#n") && formatted.startsWith("#n")) {
+    return ` ${formatted}`;
+  }
+  return formatted;
 }
 
 export function formattingEdits(snapshot, options) {
@@ -128,11 +145,11 @@ export function formattingEdits(snapshot, options) {
           indentation(options),
           false,
         );
-  let formatted = `${rendered.join("\n")}\n`;
   const source = document.getText();
-  if (!source.startsWith("#n") && formatted.startsWith("#n")) {
-    formatted = ` ${formatted}`;
-  }
+  const formatted = preserveInitialNoDefaultOutput(
+    source,
+    `${rendered.join("\n")}\n`,
+  );
   if (formatted === source) {
     return [];
   }

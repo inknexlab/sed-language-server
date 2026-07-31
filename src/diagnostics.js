@@ -1,6 +1,6 @@
 import { DiagnosticSeverity } from "vscode-languageserver";
+import { semanticDiagnostics } from "./analysis.js";
 import { nativeIssues, rangeForNode, structuredIssues } from "./cst.js";
-import { semanticDiagnostics } from "./semantics.js";
 
 const diagnosticSource = "sed-language-server";
 

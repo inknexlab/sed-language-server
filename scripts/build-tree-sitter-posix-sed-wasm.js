@@ -11,19 +11,19 @@ import {
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const treeSitterSedRevision = "fe85f809435c35a4e9fc01b8dccbcdda3678d583";
+const treeSitterPosixSedRevision = "72a635ebbe218847a3ff05431d86dba698579944";
 const languages = [
   {
     mode: "bre",
-    directory: "posix-bre",
+    directory: "posix-sed-bre",
     languageName: "posix_sed_bre",
-    wasmName: "tree-sitter-sed-posix-bre.wasm",
+    wasmName: "tree-sitter-posix-sed-bre.wasm",
   },
   {
     mode: "ere",
-    directory: "posix-ere",
+    directory: "posix-sed-ere",
     languageName: "posix_sed_ere",
-    wasmName: "tree-sitter-sed-posix-ere.wasm",
+    wasmName: "tree-sitter-posix-sed-ere.wasm",
   },
 ];
 
@@ -32,9 +32,12 @@ function runGit(grammarDirectory, arguments_) {
     encoding: "utf8",
   });
   if (result.status !== 0) {
-    throw new Error(`Cannot inspect tree-sitter-sed at ${grammarDirectory}.`, {
-      cause: result.error,
-    });
+    throw new Error(
+      `Cannot inspect tree-sitter-posix-sed at ${grammarDirectory}.`,
+      {
+        cause: result.error,
+      },
+    );
   }
   return result.stdout.trim();
 }
@@ -118,7 +121,9 @@ function buildLanguage({
 function main() {
   const grammarDirectoryArgument = process.argv[2];
   if (grammarDirectoryArgument === undefined) {
-    throw new Error("Usage: npm run build:grammar -- /path/to/tree-sitter-sed");
+    throw new Error(
+      "Usage: npm run build:grammar -- /path/to/tree-sitter-posix-sed",
+    );
   }
 
   const projectDirectory = fileURLToPath(new URL("..", import.meta.url));
@@ -134,9 +139,9 @@ function main() {
   );
 
   const actualRevision = runGit(grammarDirectory, ["rev-parse", "HEAD"]);
-  if (actualRevision !== treeSitterSedRevision) {
+  if (actualRevision !== treeSitterPosixSedRevision) {
     throw new Error(
-      `Expected tree-sitter-sed ${treeSitterSedRevision}, received ${actualRevision}.`,
+      `Expected tree-sitter-posix-sed ${treeSitterPosixSedRevision}, received ${actualRevision}.`,
     );
   }
 
@@ -146,12 +151,12 @@ function main() {
     "--untracked-files=all",
     "--",
     "common",
-    "posix-bre",
-    "posix-ere",
+    "posix-sed-bre",
+    "posix-sed-ere",
     "tree-sitter.json",
   ]);
   if (grammarChanges !== "") {
-    throw new Error("The tree-sitter-sed grammar sources must be clean.");
+    throw new Error("The tree-sitter-posix-sed grammar sources must be clean.");
   }
 
   mkdirSync(vendorDirectory, { recursive: true });
@@ -167,12 +172,12 @@ function main() {
     });
   }
 
-  const manifestPath = resolve(vendorDirectory, "tree-sitter-sed.json");
+  const manifestPath = resolve(vendorDirectory, "tree-sitter-posix-sed.json");
   writeFileSync(
     manifestPath,
     `${JSON.stringify(
       {
-        revision: treeSitterSedRevision,
+        revision: treeSitterPosixSedRevision,
         languages: manifestLanguages,
       },
       null,
@@ -185,7 +190,7 @@ function main() {
     { stdio: "inherit" },
   );
   if (formatting.status !== 0) {
-    throw new Error("Failed to format the tree-sitter-sed manifest.", {
+    throw new Error("Failed to format the tree-sitter-posix-sed manifest.", {
       cause: formatting.error,
     });
   }

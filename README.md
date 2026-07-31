@@ -49,7 +49,7 @@ The selected regular expression mode remains fixed for the server process.
 ## Diagnostics
 
 Reports POSIX syntax and static semantic issues using the
-[tree-sitter-sed](https://github.com/inknexlab/tree-sitter-sed) CST.
+[tree-sitter-posix-sed](https://github.com/inknexlab/tree-sitter-posix-sed) CST.
 
 ## License
 

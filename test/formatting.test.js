@@ -50,6 +50,17 @@ test("does not rewrite multiline text payloads", async () => {
   assert.equal(text, "a\\\n  first\\\n second\np\n");
 });
 
+test("preserves carriage returns in command operands", async () => {
+  const cases = [
+    ["#n\r\np;p", "#n\r\np\np\n"],
+    ["r file\r\np;p", "r file\r\np\np\n"],
+    ["a\\\ntext\r\np;p", "a\\\ntext\r\np\np\n"],
+  ];
+  for (const [source, expected] of cases) {
+    assert.equal((await format(source)).text, expected, JSON.stringify(source));
+  }
+});
+
 test("does not rewrite escaped newlines inside a replacement", async () => {
   const source = " s/a/first\\\n second/;p";
   const { text } = await format(source);
@@ -67,9 +78,15 @@ test("preserves regular expression, translation, and line operands", async () =>
 });
 
 test("preserves the special meaning of an initial #n comment", async () => {
-  assert.equal((await format("#n\n p;p")).text, "#n\np\np\n");
-  assert.equal((await format(";#n\np")).text, " #n\np\n");
-  assert.equal((await format("{;#n\np\n}")).text, "{\n  #n\n  p\n}\n");
+  const cases = [
+    ["#n\n p;p", "#n\np\np\n"],
+    [" #n\np", " #n\np\n"],
+    [";#n\np", " #n\np\n"],
+    ["{;#n\np\n}", "{\n  #n\n  p\n}\n"],
+  ];
+  for (const [source, expected] of cases) {
+    assert.equal((await format(source)).text, expected, JSON.stringify(source));
+  }
 });
 
 test("formats POSIX-permitted implementation variations", async () => {
@@ -95,6 +112,24 @@ test("does not rewrite CRLF input", async () => {
   const result = await format(source);
   assert.deepEqual(result.edits, []);
   assert.equal(result.text, source);
+});
+
+test("formats deeply nested blocks without using the call stack", async () => {
+  const depth = 3000;
+  const source = `${"{".repeat(depth)}p;${"};".repeat(depth - 1)}}`;
+  const { edits, text } = await format(source, "bre", {
+    insertSpaces: false,
+    tabSize: 8,
+  });
+  const lines = text.split("\n");
+  assert.equal(edits.length, 1);
+  assert.equal(lines.length, 6002);
+  assert.equal(text.length, 9_012_002);
+  assert.equal(lines[0], "{");
+  assert.equal(lines[3000], `${"\t".repeat(depth)}p`);
+  assert.equal(lines[3001], `${"\t".repeat(depth - 1)}}`);
+  assert.equal(lines[6000], "}");
+  assert.equal(lines[6001], "");
 });
 
 test("is idempotent in both regular-expression modes", async () => {

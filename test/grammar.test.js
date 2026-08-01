@@ -11,23 +11,36 @@ test("loads exactly the pinned POSIX BRE and ERE grammars", async (t) => {
   assert.deepEqual(regularExpressionModes(), ["bre", "ere"]);
   assert.equal(
     grammarManifest().revision,
-    "72a635ebbe218847a3ff05431d86dba698579944",
+    "b5869cf6368d58c35f9d412524b4d4488ebb30ae",
   );
 
   for (const mode of regularExpressionModes()) {
     await t.test(mode.toUpperCase(), async () => {
       const store = await SyntaxStore.create(mode);
       t.after(() => store.dispose());
-      const document = documentFor("1,2s/a/b/g\n");
+      const document = documentFor("1,3!s|a|b|g\n");
       const rootNode = store.open(document).tree.rootNode;
       const command = only(rootNode, "editing_command");
+      const addresses = command.childForFieldName("addresses");
+      const negation = command.childForFieldName("negation");
+      const functionWrapper = command.childForFieldName("function");
+      const substitute = functionWrapper?.namedChild(0);
+
+      assert.equal(addresses?.type, "address_clause");
+      assert.equal(addresses.childForFieldName("first")?.type, "address");
+      assert.equal(addresses.childForFieldName("second")?.type, "address");
+      assert.equal(negation?.type, "negation");
+      assert.equal(functionWrapper?.type, "function");
+      assert.equal(substitute?.type, "substitute_function");
       assert.equal(
-        command.childForFieldName("addresses")?.type,
-        "address_clause",
+        substitute?.childForFieldName("expression")?.type,
+        mode === "bre" ? "basic_reg_exp" : "extended_reg_exp",
       );
-      assert.equal(
-        command.childForFieldName("function")?.namedChild(0)?.type,
-        "substitute_function",
+      assert.deepEqual(
+        ["opening", "middle", "closing"].map(
+          (field) => substitute?.childForFieldName(field)?.type,
+        ),
+        ["delimiter", "delimiter", "delimiter"],
       );
       assert.equal(rootNode.hasError, false);
     });

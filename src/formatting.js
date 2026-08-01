@@ -1,4 +1,9 @@
-import { functionForCommand, nativeIssues, structuredIssues } from "./cst.js";
+import {
+  functionForCommand,
+  nativeIssues,
+  structuredIssues,
+  textForIndices,
+} from "./cst.js";
 
 const formattableOutcomes = new Set([
   "implementation_defined_syntax",
@@ -12,13 +17,6 @@ function indentation(options) {
   const requested = Number(options?.tabSize);
   const width = Number.isInteger(requested) && requested > 0 ? requested : 2;
   return " ".repeat(width);
-}
-
-function textBetween(document, startIndex, endIndex) {
-  return document.getText({
-    start: document.positionAt(startIndex),
-    end: document.positionAt(endIndex),
-  });
 }
 
 function structuralStart(command) {
@@ -36,49 +34,67 @@ function emptySeparator(emptyCommand) {
   );
 }
 
-function renderCommand(document, command, depth, indent) {
-  const prefix = indent.repeat(depth);
-  const functionNode = functionForCommand(command);
-  if (functionNode?.type !== "block_function") {
-    return (
-      prefix + textBetween(document, structuralStart(command), command.endIndex)
-    );
-  }
-
-  const verb = functionNode.childForFieldName("verb");
-  const commands = functionNode.childForFieldName("commands");
-  const closing = functionNode.childForFieldName("closing");
-  if (verb === null || commands === null || closing === null) {
-    return undefined;
-  }
-  const opening = textBetween(
-    document,
-    structuralStart(command),
-    verb.endIndex,
-  );
-  const nested = renderCommandList(document, commands, depth + 1, indent, true);
-  const closingText = textBetween(
-    document,
-    closing.startIndex,
-    closing.endIndex,
-  );
-  return [`${prefix}${opening}`, ...nested, `${prefix}${closingText}`].join(
-    "\n",
-  );
-}
-
-function renderCommandList(document, commandList, depth, indent, nested) {
+function renderCommandList(document, commandList, indent) {
   const rendered = [];
-  let skippedOpeningNewline = !nested;
-  let awaitingCommandNewline = false;
-  for (const child of commandList.namedChildren) {
-    if (child.type === "editing_command") {
-      const command = renderCommand(document, child, depth, indent);
-      if (command !== undefined) {
-        rendered.push(command);
-        awaitingCommandNewline = true;
-        skippedOpeningNewline = true;
+  const frames = [
+    {
+      commandList,
+      nextChildIndex: 0,
+      depth: 0,
+      skippedOpeningNewline: true,
+      awaitingCommandNewline: false,
+      closingLine: undefined,
+    },
+  ];
+  while (frames.length > 0) {
+    const frame = frames.at(-1);
+    if (frame.nextChildIndex >= frame.commandList.namedChildCount) {
+      frames.pop();
+      if (frame.closingLine !== undefined) {
+        rendered.push(frame.closingLine);
       }
+      continue;
+    }
+    const child = frame.commandList.namedChild(frame.nextChildIndex);
+    frame.nextChildIndex += 1;
+    if (child === null) {
+      continue;
+    }
+    if (child.type === "editing_command") {
+      const prefix = indent.repeat(frame.depth);
+      const functionNode = functionForCommand(child);
+      if (functionNode?.type !== "block_function") {
+        rendered.push(
+          prefix +
+            textForIndices(document, structuralStart(child), child.endIndex),
+        );
+        frame.awaitingCommandNewline = true;
+        frame.skippedOpeningNewline = true;
+        continue;
+      }
+
+      const verb = functionNode.childForFieldName("verb");
+      const commands = functionNode.childForFieldName("commands");
+      const closing = functionNode.childForFieldName("closing");
+      if (verb === null || commands === null || closing === null) {
+        continue;
+      }
+      rendered.push(
+        prefix +
+          textForIndices(document, structuralStart(child), verb.endIndex),
+      );
+      frame.awaitingCommandNewline = true;
+      frame.skippedOpeningNewline = true;
+      frames.push({
+        commandList: commands,
+        nextChildIndex: 0,
+        depth: frame.depth + 1,
+        skippedOpeningNewline: false,
+        awaitingCommandNewline: false,
+        closingLine:
+          prefix +
+          textForIndices(document, closing.startIndex, closing.endIndex),
+      });
       continue;
     }
     const separator =
@@ -90,7 +106,7 @@ function renderCommandList(document, commandList, depth, indent, nested) {
     if (separator === undefined) {
       continue;
     }
-    const text = textBetween(
+    const text = textForIndices(
       document,
       separator.startIndex,
       separator.endIndex,
@@ -98,12 +114,12 @@ function renderCommandList(document, commandList, depth, indent, nested) {
     if (text !== "\n") {
       continue;
     }
-    if (awaitingCommandNewline) {
-      awaitingCommandNewline = false;
+    if (frame.awaitingCommandNewline) {
+      frame.awaitingCommandNewline = false;
       continue;
     }
-    if (!skippedOpeningNewline) {
-      skippedOpeningNewline = true;
+    if (!frame.skippedOpeningNewline) {
+      frame.skippedOpeningNewline = true;
       continue;
     }
     rendered.push("");
@@ -120,8 +136,8 @@ function canFormat(root) {
   );
 }
 
-function preserveInitialNoDefaultOutput(source, formatted) {
-  if (!source.startsWith("#n") && formatted.startsWith("#n")) {
+function preserveDefaultOutputBehavior(defaultOutputSuppressed, formatted) {
+  if (!defaultOutputSuppressed && formatted.startsWith("#n")) {
     return ` ${formatted}`;
   }
   return formatted;
@@ -138,16 +154,12 @@ export function formattingEdits(snapshot, options) {
   const rendered =
     commandList === undefined
       ? []
-      : renderCommandList(
-          document,
-          commandList,
-          0,
-          indentation(options),
-          false,
-        );
+      : renderCommandList(document, commandList, indentation(options));
   const source = document.getText();
-  const formatted = preserveInitialNoDefaultOutput(
-    source,
+  const defaultOutputSuppressed =
+    tree.rootNode.descendantsOfType("default_output_suppression").length > 0;
+  const formatted = preserveDefaultOutputBehavior(
+    defaultOutputSuppressed,
     `${rendered.join("\n")}\n`,
   );
   if (formatted === source) {

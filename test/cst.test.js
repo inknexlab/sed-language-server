@@ -7,6 +7,7 @@ import {
   nativeIssues,
   rangeForNode,
   structuredIssues,
+  textForIndices,
   textForNode,
 } from "../src/cst.js";
 import { SyntaxStore } from "../src/syntax.js";
@@ -60,6 +61,16 @@ test("projects POSIX editing functions and labels in source order", async () => 
       });
     },
   );
+});
+
+test("preserves carriage returns in source-backed label names", async () => {
+  await withTree("bre", ":same\r\n:same\n", (document, root) => {
+    assert.equal(textForIndices(document, 1, 6), "same\r");
+    assert.deepEqual(
+      labelSymbols(document, root).map(({ name }) => name),
+      ["same\r", "same"],
+    );
+  });
 });
 
 test("extracts every structured outcome without interpreting it", async () => {

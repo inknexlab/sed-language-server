@@ -53,11 +53,12 @@ export function descendants(root, type) {
   return matches;
 }
 
+export function textForIndices(document, startIndex, endIndex) {
+  return document.getText().slice(startIndex, endIndex);
+}
+
 export function textForNode(document, node) {
-  return document.getText({
-    start: document.positionAt(node.startIndex),
-    end: document.positionAt(node.endIndex),
-  });
+  return textForIndices(document, node.startIndex, node.endIndex);
 }
 
 export function rangeForNode(document, node) {

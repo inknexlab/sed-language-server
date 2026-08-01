@@ -50,6 +50,12 @@ test("finds every matching definition from a definition or reference", async () 
   }
 });
 
+test("does not link labels that differ by a trailing carriage return", async () => {
+  await withSnapshot("bre", ":target\r\nb target\n", (snapshot) => {
+    assert.deepEqual(definitions(snapshot, { line: 1, character: 3 }), []);
+  });
+});
+
 test("returns references in document order and honors includeDeclaration", async () => {
   await withSnapshot("bre", ":outer\n{\nb outer\nt outer\n}\n", (snapshot) => {
     assert.deepEqual(

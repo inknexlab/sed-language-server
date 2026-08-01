@@ -26,6 +26,8 @@ export function serializeNode(node) {
     missing: node.isMissing,
     startIndex: node.startIndex,
     endIndex: node.endIndex,
+    startPosition: node.startPosition,
+    endPosition: node.endPosition,
     children: Array.from({ length: node.childCount }, (_, index) => {
       const child = node.child(index);
       assert.notEqual(child, null);

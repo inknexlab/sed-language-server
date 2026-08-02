@@ -879,6 +879,36 @@ test("address recovery preserves omitted and excess addresses", () => {
   }
 });
 
+test("address separators expose concrete comma tokens independently from recovery", () => {
+  const cases = [
+    ["1,2p\n", [1, 2], []],
+    ["1 ,2p\n", [2, 3], ["blanks_around_address_separator"]],
+    ["1, 2p\n", [1, 2], ["blanks_around_address_separator"]],
+    ["1 2p\n", undefined, ["missing_address_separator"]],
+  ];
+
+  for (const variant of variantIds) {
+    for (const [source, tokenRange, reasons] of cases) {
+      const tree = parse(variant, source);
+      assertNoNativeError(tree);
+      assert.deepEqual(issueReasons(tree), reasons, source);
+
+      const token = only(tree, "address_separator").childForFieldName("token");
+      if (tokenRange === undefined) {
+        assert.equal(token, null, source);
+      } else {
+        assert.equal(token?.type, "address_separator_token", source);
+        assert.equal(token?.text, ",", source);
+        assert.deepEqual(
+          [token?.startIndex, token?.endIndex],
+          tokenRange,
+          source,
+        );
+      }
+    }
+  }
+});
+
 test("POSIX ambiguity is exposed instead of selecting an implementation", () => {
   for (const [source, positionIssue] of [
     ["/\\?/p\n", "leading_duplication_symbol"],

@@ -11,7 +11,7 @@ import {
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const treeSitterPosixSedRevision = "b5869cf6368d58c35f9d412524b4d4488ebb30ae";
+const treeSitterPosixSedRevision = "38b635ec26e6fd403e250b2932706cac15f36311";
 const languages = [
   {
     mode: "bre",

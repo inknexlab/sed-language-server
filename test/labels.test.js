@@ -7,7 +7,7 @@ import {
   references,
   rename,
 } from "../src/labels.js";
-import { SyntaxStore } from "../src/syntax.js";
+import { SyntaxStore } from "../src/parser.js";
 import { documentFor } from "./support.js";
 
 async function withSnapshot(mode, source, callback) {

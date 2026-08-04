@@ -10,7 +10,7 @@ import {
   textForIndices,
   textForNode,
 } from "../src/cst.js";
-import { SyntaxStore } from "../src/syntax.js";
+import { SyntaxStore } from "../src/parser.js";
 import { documentFor } from "./support.js";
 
 async function withTree(mode, source, callback) {

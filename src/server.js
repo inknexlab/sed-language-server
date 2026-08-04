@@ -19,7 +19,7 @@ import {
   references,
   rename,
 } from "./labels.js";
-import { regularExpressionModes, SyntaxStore } from "./syntax.js";
+import { regularExpressionModes, SyntaxStore } from "./parser.js";
 
 if (process.argv.length === 2) {
   process.argv.push("--stdio");

@@ -4,7 +4,7 @@ import {
   grammarManifest,
   regularExpressionModes,
   SyntaxStore,
-} from "../src/syntax.js";
+} from "../src/parser.js";
 import { documentFor, only } from "./support.js";
 
 test("loads exactly the pinned POSIX BRE and ERE grammars", async (t) => {

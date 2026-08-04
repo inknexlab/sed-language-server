@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { SyntaxStore } from "../src/syntax.js";
+import { SyntaxStore } from "../src/parser.js";
 import { documentFor, serializeNode } from "./support.js";
 
 function changeForOffsets(document, startIndex, endIndex, text) {

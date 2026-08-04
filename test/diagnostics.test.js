@@ -6,7 +6,7 @@ import {
   diagnostics,
   syntaxDiagnostics,
 } from "../src/diagnostics.js";
-import { grammarManifest, SyntaxStore } from "../src/syntax.js";
+import { grammarManifest, SyntaxStore } from "../src/parser.js";
 import { documentFor } from "./support.js";
 
 async function diagnosticsFor(source, mode = "bre", syntaxOnly = false) {

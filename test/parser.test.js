@@ -1,8 +1,49 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { SyntaxStore } from "../src/parser.js";
-import { documentFor, serializeNode } from "./support.js";
+import {
+  grammarManifest,
+  regularExpressionModes,
+  SyntaxStore,
+} from "../src/parser.js";
+import { documentFor, serializeNode } from "./helpers.js";
+
+test("loads exactly the pinned POSIX BRE and ERE grammars", async (t) => {
+  assert.deepEqual(regularExpressionModes(), ["bre", "ere"]);
+  assert.equal(
+    grammarManifest().revision,
+    "38b635ec26e6fd403e250b2932706cac15f36311",
+  );
+
+  for (const mode of regularExpressionModes()) {
+    await t.test(mode.toUpperCase(), async () => {
+      const store = await SyntaxStore.create(mode);
+      t.after(() => store.dispose());
+      const root = store.open(documentFor("s/a/b/\n")).tree.rootNode;
+      const expressionType =
+        mode === "bre" ? "basic_reg_exp" : "extended_reg_exp";
+      assert.equal(root.descendantsOfType(expressionType).length, 1);
+      assert.equal(root.hasError, false);
+    });
+  }
+});
+
+test("the manifest exposes structured issue outcomes per grammar", () => {
+  const { bre, ere } = grammarManifest().languages;
+  assert.deepEqual(Object.keys(bre.outcomes).sort(), [
+    "implementation_defined_syntax",
+    "implementation_option_syntax",
+    "incomplete_syntax",
+    "nonconforming_syntax",
+    "undefined_syntax",
+    "unspecified_syntax",
+  ]);
+  assert.equal(ere.outcomes.implementation_defined_syntax, undefined);
+  assert.ok(bre.outcomes.undefined_syntax.includes("malformed_interval"));
+  assert.ok(
+    ere.outcomes.incomplete_syntax.includes("incomplete_regular_expression"),
+  );
+});
 
 function changeForOffsets(document, startIndex, endIndex, text) {
   return {

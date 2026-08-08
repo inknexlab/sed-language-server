@@ -11,7 +11,7 @@ import {
   textForNode,
 } from "../src/cst.js";
 import { SyntaxStore } from "../src/parser.js";
-import { documentFor } from "./support.js";
+import { documentFor } from "./helpers.js";
 
 async function withTree(mode, source, callback) {
   const store = await SyntaxStore.create(mode);

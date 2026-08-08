@@ -7,7 +7,7 @@ import {
   syntaxDiagnostics,
 } from "../src/diagnostics.js";
 import { grammarManifest, SyntaxStore } from "../src/parser.js";
-import { documentFor } from "./support.js";
+import { documentFor } from "./helpers.js";
 
 async function diagnosticsFor(source, mode = "bre", syntaxOnly = false) {
   const store = await SyntaxStore.create(mode);

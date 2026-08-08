@@ -8,7 +8,7 @@ import {
   rename,
 } from "../src/labels.js";
 import { SyntaxStore } from "../src/parser.js";
-import { documentFor } from "./support.js";
+import { documentFor } from "./helpers.js";
 
 async function withSnapshot(mode, source, callback) {
   const store = await SyntaxStore.create(mode);

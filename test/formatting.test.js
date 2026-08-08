@@ -3,7 +3,7 @@ import test from "node:test";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { formattingEdits } from "../src/formatting.js";
 import { SyntaxStore } from "../src/parser.js";
-import { documentFor } from "./support.js";
+import { documentFor } from "./helpers.js";
 
 async function format(source, mode = "bre", options = {}) {
   const store = await SyntaxStore.create(mode);

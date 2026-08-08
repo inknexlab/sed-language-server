@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { SyntaxStore } from "../src/parser.js";
-import { documentFor } from "./support.js";
+import { documentFor } from "./helpers.js";
 
 const variantIds = ["bre", "ere"];
 let stores = {};

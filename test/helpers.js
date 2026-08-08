@@ -13,12 +13,6 @@ export function documentFor(text, version = 1) {
   );
 }
 
-export function only(rootNode, type) {
-  const matches = rootNode.descendantsOfType(type);
-  assert.equal(matches.length, 1, rootNode.toString());
-  return matches[0];
-}
-
 export function serializeNode(node) {
   return {
     type: node.type,

@@ -1,13 +1,22 @@
 import { CompletionItemKind } from "vscode-languageserver";
-import { commandReferences, referenceDocumentation } from "./catalog.js";
 import {
+  commandReferences,
+  referenceDocumentation,
+  substitutionFlagReferences,
+} from "./catalog.js";
+import {
+  delimiterTokenFor,
   descendants,
   isCompleteContextAddress,
   labelSymbols,
   rangeForNode,
+  textForNode,
 } from "./cst.js";
 
 const completionFunctionTypes = new Set(["branch_function", "test_function"]);
+const substitutionFlagNodeTypes = new Set(
+  substitutionFlagReferences().map(({ nodeType }) => nodeType),
+);
 
 function labelContextAt(snapshot, position) {
   const { document, tree } = snapshot;
@@ -208,6 +217,109 @@ function commandContextAt(snapshot, position) {
   };
 }
 
+function substitutionFlagNodeType(node) {
+  if (node.type !== "write_flag") {
+    return substitutionFlagNodeTypes.has(node.type) ? node.type : undefined;
+  }
+  return node.childForFieldName("verb")?.type === "substitution_flag"
+    ? "substitution_flag"
+    : undefined;
+}
+
+function substitutionFlagContextAt(snapshot, position) {
+  const { document, tree } = snapshot;
+  const offset = document.offsetAt(position);
+  const nodes = descendants(tree.rootNode);
+  const newlineOffsets = new Set(
+    nodes
+      .filter(
+        (node) =>
+          node.type === "command_separator" &&
+          textForNode(document, node) === "\n",
+      )
+      .map(({ startIndex }) => startIndex),
+  );
+
+  for (const substitute of nodes) {
+    if (substitute.type !== "substitute_function") {
+      continue;
+    }
+    const closing = delimiterTokenFor(substitute, "closing");
+    if (closing === undefined) {
+      continue;
+    }
+    const flags = substitute.childForFieldName("flags");
+    if (flags !== null && flags.startIndex !== closing.endIndex) {
+      continue;
+    }
+    const children = flags === null ? [] : [...flags.namedChildren];
+    let carriageReturn;
+    const last = children.at(-1);
+    if (
+      last?.type === "syntax_issue" &&
+      textForNode(document, last) === "\r" &&
+      newlineOffsets.has(last.endIndex)
+    ) {
+      carriageReturn = children.pop();
+    }
+    if (children.some(({ type }) => type === "syntax_issue")) {
+      continue;
+    }
+
+    const writeIndex = children.findIndex(({ type }) => type === "write_flag");
+    if (writeIndex >= 0 && writeIndex !== children.length - 1) {
+      continue;
+    }
+    const write = writeIndex < 0 ? undefined : children[writeIndex];
+    const nonWrite = write === undefined ? children : children.slice(0, -1);
+    const present = new Set();
+    const boundaries = new Set([closing.endIndex]);
+    let logicalEnd = closing.endIndex;
+    let valid = true;
+    for (const node of nonWrite) {
+      const nodeType = substitutionFlagNodeType(node);
+      if (node.startIndex !== logicalEnd || nodeType === undefined) {
+        valid = false;
+        break;
+      }
+      present.add(nodeType);
+      logicalEnd = node.endIndex;
+      boundaries.add(logicalEnd);
+    }
+    if (!valid) {
+      continue;
+    }
+    if (write !== undefined) {
+      const nodeType = substitutionFlagNodeType(write);
+      if (write.startIndex !== logicalEnd || nodeType === undefined) {
+        continue;
+      }
+      present.add(nodeType);
+    } else if (
+      carriageReturn !== undefined &&
+      carriageReturn.startIndex !== logicalEnd
+    ) {
+      continue;
+    }
+    if (!boundaries.has(offset)) {
+      continue;
+    }
+
+    const insertion = document.positionAt(offset);
+    const lineTail =
+      tree.rootNode.endIndex === logicalEnd ||
+      newlineOffsets.has(logicalEnd) ||
+      (carriageReturn?.startIndex === logicalEnd &&
+        newlineOffsets.has(carriageReturn.endIndex));
+    return {
+      lineTail: write === undefined && offset === logicalEnd && lineTail,
+      present,
+      range: { start: insertion, end: insertion },
+    };
+  }
+  return undefined;
+}
+
 function completionName(name, carriageReturn) {
   if (name.endsWith("\r") !== carriageReturn) {
     return undefined;
@@ -243,28 +355,61 @@ function labelCompletionItems(snapshot, context) {
   return items;
 }
 
+function referenceCompletionItem(reference, label, range, documentationKind) {
+  return {
+    label,
+    kind: CompletionItemKind.Keyword,
+    detail: reference.title,
+    documentation: referenceDocumentation(reference, documentationKind),
+    textEdit: { range, newText: label },
+  };
+}
+
 function commandCompletionItems(context, documentationKind) {
   return commandReferences()
     .filter(({ maximumAddresses }) => maximumAddresses >= context.addresses)
-    .map((reference) => ({
-      label: reference.verb,
-      kind: CompletionItemKind.Keyword,
-      detail: reference.title,
-      documentation: referenceDocumentation(reference, documentationKind),
-      textEdit: {
-        range: context.range,
-        newText: reference.verb,
-      },
-    }));
+    .map((reference) =>
+      referenceCompletionItem(
+        reference,
+        reference.verb,
+        context.range,
+        documentationKind,
+      ),
+    );
+}
+
+function substitutionFlagCompletionItems(context, documentationKind) {
+  return substitutionFlagReferences()
+    .filter(
+      (reference) =>
+        reference.spelling !== null &&
+        !context.present.has(reference.nodeType) &&
+        (!reference.terminal || context.lineTail),
+    )
+    .map((reference) =>
+      referenceCompletionItem(
+        reference,
+        reference.spelling,
+        context.range,
+        documentationKind,
+      ),
+    );
 }
 
 export function completionItems(snapshot, position, documentationKind) {
-  const context = labelContextAt(snapshot, position);
-  if (context === undefined) {
-    const commandContext = commandContextAt(snapshot, position);
-    return commandContext === undefined
-      ? []
-      : commandCompletionItems(commandContext, documentationKind);
+  const labelContext = labelContextAt(snapshot, position);
+  if (labelContext !== undefined) {
+    return labelCompletionItems(snapshot, labelContext);
   }
-  return labelCompletionItems(snapshot, context);
+  const substitutionFlagContext = substitutionFlagContextAt(snapshot, position);
+  if (substitutionFlagContext !== undefined) {
+    return substitutionFlagCompletionItems(
+      substitutionFlagContext,
+      documentationKind,
+    );
+  }
+  const commandContext = commandContextAt(snapshot, position);
+  return commandContext === undefined
+    ? []
+    : commandCompletionItems(commandContext, documentationKind);
 }

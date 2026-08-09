@@ -68,8 +68,8 @@ export function rangeForNode(document, node) {
   };
 }
 
-export function delimiterTokenFor(contextAddress, field) {
-  const delimiter = contextAddress.childForFieldName(field);
+export function delimiterTokenFor(node, field) {
+  const delimiter = node.childForFieldName(field);
   const token = delimiter?.childForFieldName("token");
   return token?.type === "delimiter_token" ? token : undefined;
 }

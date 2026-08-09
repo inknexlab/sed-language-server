@@ -81,6 +81,38 @@ const twoAddressCommandVerbs = [
   "y",
 ];
 
+const substitutionFlags = [
+  {
+    label: "g",
+    detail: "Global",
+    synopsis: "s/RE/replacement/g",
+    description:
+      "Replaces all non-overlapping instances of RE rather than only the first.",
+  },
+  {
+    label: "i",
+    detail: "Case-Insensitive",
+    synopsis: "s/RE/replacement/i",
+    description: "Matches RE case-insensitively.",
+  },
+  {
+    label: "p",
+    detail: "Print on Substitution",
+    synopsis: "s/RE/replacement/p",
+    description:
+      "Writes the pattern space to standard output if a replacement was made.",
+  },
+  {
+    label: "w",
+    detail: "Write on Substitution",
+    synopsis: "s/RE/replacement/w wfile",
+    description:
+      "Appends the pattern space to wfile if a replacement was made.",
+  },
+];
+
+const allSubstitutionFlagLabels = substitutionFlags.map(({ label }) => label);
+
 function assertCommandItems(items, verbs, editRange) {
   assert.deepEqual(
     items.map(({ label }) => label),
@@ -95,6 +127,42 @@ function assertCommandItems(items, verbs, editRange) {
       newText: completion.label,
     });
   }
+}
+
+function substitutionFlagDocumentation(reference, kind) {
+  const plain = `${reference.synopsis}\n\n${reference.description}`;
+  if (kind === null) {
+    return plain;
+  }
+  return {
+    kind,
+    value:
+      kind === MarkupKind.Markdown
+        ? `\`\`\`sed\n${reference.synopsis}\n\`\`\`\n\n${reference.description}`
+        : plain,
+  };
+}
+
+function substitutionFlagItems(
+  labels,
+  editRange,
+  documentationKind = MarkupKind.Markdown,
+) {
+  return substitutionFlags
+    .filter(({ label }) => labels.includes(label))
+    .map((reference) => ({
+      label: reference.label,
+      kind: CompletionItemKind.Keyword,
+      detail: reference.detail,
+      documentation: substitutionFlagDocumentation(
+        reference,
+        documentationKind,
+      ),
+      textEdit: {
+        range: editRange,
+        newText: reference.label,
+      },
+    }));
 }
 
 function range(line, start, end = start) {
@@ -145,6 +213,151 @@ test("renders command documentation as plain text", async () => {
         "[address[,address]]D\n\nDeletes through the first newline and restarts the cycle without reading input, or acts like d when no newline exists.",
     });
   });
+});
+
+test("completes every fixed substitution flag with exact documentation", async () => {
+  for (const mode of ["bre", "ere"]) {
+    await withSnapshot(mode, "s/a/b/", (snapshot) => {
+      const editRange = range(0, 6);
+      assert.deepEqual(
+        completionItems(snapshot, editRange.start),
+        substitutionFlagItems(allSubstitutionFlagLabels, editRange),
+      );
+    });
+  }
+});
+
+test("renders substitution flag documentation in the negotiated representation", async () => {
+  await withSnapshot("bre", "s/a/b/", (snapshot) => {
+    const position = { line: 0, character: 6 };
+    const editRange = { start: position, end: position };
+    for (const documentationKind of [MarkupKind.PlainText, null]) {
+      assert.deepEqual(
+        provideCompletionItems(snapshot, position, documentationKind),
+        substitutionFlagItems(
+          allSubstitutionFlagLabels,
+          editRange,
+          documentationKind,
+        ),
+      );
+    }
+  });
+});
+
+test("uses a UTF-16 insertion range after an alternate substitution delimiter", async () => {
+  await withSnapshot("ere", "s|😀|x|", (snapshot) => {
+    const editRange = range(0, 7);
+    assert.deepEqual(
+      completionItems(snapshot, editRange.start),
+      substitutionFlagItems(allSubstitutionFlagLabels, editRange),
+    );
+  });
+});
+
+test("filters existing substitution flags at valid insertion boundaries", async () => {
+  const cases = [
+    {
+      source: "s/a/b/g",
+      position: { line: 0, character: 7 },
+      labels: ["i", "p", "w"],
+    },
+    {
+      source: "s/a/b/gp",
+      position: { line: 0, character: 7 },
+      labels: ["i"],
+    },
+    {
+      source: "s/a/b/gp",
+      position: { line: 0, character: 8 },
+      labels: ["i", "w"],
+    },
+    {
+      source: "s/a/b/gip",
+      position: { line: 0, character: 9 },
+      labels: ["w"],
+    },
+    {
+      source: "s/a/b/001",
+      position: { line: 0, character: 9 },
+      labels: allSubstitutionFlagLabels,
+    },
+    {
+      source: "s/a/b/w output",
+      position: { line: 0, character: 6 },
+      labels: ["g", "i", "p"],
+    },
+  ];
+  for (const { source, position, labels } of cases) {
+    await withSnapshot("bre", source, (snapshot) => {
+      const editRange = { start: position, end: position };
+      assert.deepEqual(
+        completionItems(snapshot, position),
+        substitutionFlagItems(labels, editRange),
+        JSON.stringify({ source, position }),
+      );
+    });
+  }
+});
+
+test("only offers the write flag before EOF or a physical line ending", async () => {
+  const cases = [
+    {
+      source: "s/a/b/\n",
+      position: { line: 0, character: 6 },
+      labels: allSubstitutionFlagLabels,
+    },
+    {
+      source: "s/a/b/\r\n",
+      position: { line: 0, character: 6 },
+      labels: allSubstitutionFlagLabels,
+    },
+    {
+      source: "s/a/b/;p",
+      position: { line: 0, character: 6 },
+      labels: ["g", "i", "p"],
+    },
+    {
+      source: "{s/a/b/}",
+      position: { line: 0, character: 7 },
+      labels: ["g", "i", "p"],
+    },
+  ];
+  for (const { source, position, labels } of cases) {
+    await withSnapshot("bre", source, (snapshot) => {
+      const editRange = { start: position, end: position };
+      assert.deepEqual(
+        completionItems(snapshot, position),
+        substitutionFlagItems(labels, editRange),
+        JSON.stringify({ source, position }),
+      );
+    });
+  }
+});
+
+test("does not complete outside a valid substitution flag insertion boundary", async () => {
+  const cases = [
+    { source: "s/a/b/z", position: { line: 0, character: 7 } },
+    { source: "s/a/b/000", position: { line: 0, character: 9 } },
+    { source: "s/a/b", position: { line: 0, character: 5 } },
+    { source: "s/a/b/123", position: { line: 0, character: 7 } },
+    { source: "s/a/b/123", position: { line: 0, character: 8 } },
+    { source: "s/a/b/w output", position: { line: 0, character: 7 } },
+    { source: "s/a/b/w output", position: { line: 0, character: 8 } },
+    { source: "s/a/b/w output", position: { line: 0, character: 9 } },
+    { source: "s/a/b/w output", position: { line: 0, character: 12 } },
+    { source: "s/a/b/", position: { line: 0, character: 2 } },
+    { source: "s/a/b/", position: { line: 0, character: 4 } },
+    { source: "s/a/b/", position: { line: 0, character: 5 } },
+  ];
+  for (const { source, position } of cases) {
+    await withSnapshot("bre", source, (snapshot) => {
+      assert.deepEqual(
+        completionItems(snapshot, position),
+        [],
+        JSON.stringify({ source, position }),
+      );
+    });
+  }
 });
 
 test("completes blank command slots at concrete command boundaries", async () => {

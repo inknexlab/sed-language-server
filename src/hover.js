@@ -1,42 +1,15 @@
 import { MarkupKind } from "vscode-languageserver";
-import { commandReferenceForVerb, referenceDocumentation } from "./catalog.js";
+import {
+  commandReferenceForVerb,
+  referenceDocumentation,
+  substitutionFlagReferenceForType,
+} from "./catalog.js";
 import {
   delimiterTokenFor,
   isCompleteContextAddress,
   rangeForNode,
   textForNode,
 } from "./cst.js";
-
-const substitutionFlagReferenceByType = Object.freeze({
-  occurrence_flag: {
-    title: "Occurrence",
-    synopsis: "s/RE/replacement/n",
-    description: "Replaces only the nth occurrence of RE in the pattern space.",
-  },
-  global_flag: {
-    title: "Global",
-    synopsis: "s/RE/replacement/g",
-    description:
-      "Replaces all non-overlapping instances of RE rather than only the first.",
-  },
-  case_insensitive_flag: {
-    title: "Case-Insensitive",
-    synopsis: "s/RE/replacement/i",
-    description: "Matches RE case-insensitively.",
-  },
-  print_flag: {
-    title: "Print on Substitution",
-    synopsis: "s/RE/replacement/p",
-    description:
-      "Writes the pattern space to standard output if a replacement was made.",
-  },
-  substitution_flag: {
-    title: "Write on Substitution",
-    synopsis: "s/RE/replacement/w wfile",
-    description:
-      "Appends the pattern space to wfile if a replacement was made.",
-  },
-});
 
 const addressReferenceByType = Object.freeze({
   line_number_address: {
@@ -106,7 +79,7 @@ const graphicDelimiterPattern = /^[\p{L}\p{N}\p{P}\p{S}]$/u;
 function directReferenceForNode(node, spelling) {
   return node.type === "function_verb"
     ? commandReferenceForVerb(spelling)
-    : substitutionFlagReferenceByType[node.type];
+    : substitutionFlagReferenceForType(node.type);
 }
 
 function directTargetForNode(document, node) {

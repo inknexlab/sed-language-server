@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@inknexlab/sed-language-server)](https://www.npmjs.com/package/@inknexlab/sed-language-server)
 
-A language server for POSIX.1-2024 `sed` syntax.
+A language server for POSIX.1-2024 `sed`.
 
 ## Installation
 

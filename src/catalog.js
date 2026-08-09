@@ -16,7 +16,25 @@ function defineCommand({ verb, maximumAddresses, title, syntax, description }) {
   });
 }
 
-const references = Object.freeze([
+function defineSubstitutionFlag({
+  nodeType,
+  spelling,
+  terminal,
+  title,
+  synopsis,
+  description,
+}) {
+  return Object.freeze({
+    nodeType,
+    spelling,
+    terminal,
+    title,
+    synopsis,
+    description,
+  });
+}
+
+const commandReferenceList = Object.freeze([
   defineCommand({
     verb: "{",
     maximumAddresses: 2,
@@ -218,16 +236,76 @@ const references = Object.freeze([
   }),
 ]);
 
-const referenceByVerb = new Map(
-  references.map((reference) => [reference.verb, reference]),
+const substitutionFlagReferenceList = Object.freeze([
+  defineSubstitutionFlag({
+    nodeType: "occurrence_flag",
+    spelling: null,
+    terminal: false,
+    title: "Occurrence",
+    synopsis: "s/RE/replacement/n",
+    description: "Replaces only the nth occurrence of RE in the pattern space.",
+  }),
+  defineSubstitutionFlag({
+    nodeType: "global_flag",
+    spelling: "g",
+    terminal: false,
+    title: "Global",
+    synopsis: "s/RE/replacement/g",
+    description:
+      "Replaces all non-overlapping instances of RE rather than only the first.",
+  }),
+  defineSubstitutionFlag({
+    nodeType: "case_insensitive_flag",
+    spelling: "i",
+    terminal: false,
+    title: "Case-Insensitive",
+    synopsis: "s/RE/replacement/i",
+    description: "Matches RE case-insensitively.",
+  }),
+  defineSubstitutionFlag({
+    nodeType: "print_flag",
+    spelling: "p",
+    terminal: false,
+    title: "Print on Substitution",
+    synopsis: "s/RE/replacement/p",
+    description:
+      "Writes the pattern space to standard output if a replacement was made.",
+  }),
+  defineSubstitutionFlag({
+    nodeType: "substitution_flag",
+    spelling: "w",
+    terminal: true,
+    title: "Write on Substitution",
+    synopsis: "s/RE/replacement/w wfile",
+    description:
+      "Appends the pattern space to wfile if a replacement was made.",
+  }),
+]);
+
+const commandReferenceByVerb = new Map(
+  commandReferenceList.map((reference) => [reference.verb, reference]),
+);
+const substitutionFlagReferenceByType = new Map(
+  substitutionFlagReferenceList.map((reference) => [
+    reference.nodeType,
+    reference,
+  ]),
 );
 
 export function commandReferences() {
-  return references;
+  return commandReferenceList;
 }
 
 export function commandReferenceForVerb(verb) {
-  return referenceByVerb.get(verb);
+  return commandReferenceByVerb.get(verb);
+}
+
+export function substitutionFlagReferences() {
+  return substitutionFlagReferenceList;
+}
+
+export function substitutionFlagReferenceForType(nodeType) {
+  return substitutionFlagReferenceByType.get(nodeType);
 }
 
 function plainReferenceProse(value) {

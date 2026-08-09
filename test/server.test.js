@@ -94,6 +94,15 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
   assert.deepEqual(initialized.capabilities.renameProvider, {
     prepareProvider: true,
   });
+  assert.equal(initialized.capabilities.hoverProvider, true);
+
+  assert.equal(
+    await server.connection.sendRequest("textDocument/hover", {
+      textDocument: { uri: "file:///unopened.sed" },
+      position: { line: 0, character: 0 },
+    }),
+    null,
+  );
 
   const defaultModeUri = "file:///default-mode.sed";
   const defaultModeDiagnostics = notification(
@@ -136,6 +145,24 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
   assert.deepEqual(
     openDiagnostics.diagnostics.map(({ code }) => code),
     ["empty-regular-expression-without-previous"],
+  );
+
+  assert.deepEqual(
+    await server.connection.sendRequest("textDocument/hover", {
+      textDocument: { uri },
+      position: { line: 3, character: 0 },
+    }),
+    {
+      contents: {
+        kind: "markdown",
+        value:
+          "### `p` — Print\n\n```sed\n[address[,address]]p\n```\n\nWrites the pattern space to standard output.",
+      },
+      range: {
+        start: { line: 3, character: 0 },
+        end: { line: 3, character: 1 },
+      },
+    },
   );
 
   assert.deepEqual(

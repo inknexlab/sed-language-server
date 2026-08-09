@@ -12,6 +12,7 @@ import {
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { diagnostics } from "./diagnostics.js";
 import { formattingEdits } from "./formatting.js";
+import { hover } from "./hover.js";
 import {
   definitions,
   prepareRename,
@@ -101,6 +102,7 @@ connection.onInitialize(async ({ initializationOptions }) => {
       },
       definitionProvider: true,
       referencesProvider: true,
+      hoverProvider: true,
       renameProvider: { prepareProvider: true },
       documentFormattingProvider: true,
     },
@@ -134,6 +136,11 @@ connection.onDefinition(({ textDocument, position }) => {
   }
   const locations = definitions(current, position);
   return locations.length === 0 ? null : locations;
+});
+
+connection.onHover(({ textDocument, position }) => {
+  const current = snapshot(textDocument.uri);
+  return current === undefined ? null : (hover(current, position) ?? null);
 });
 
 connection.onReferences(({ textDocument, position, context }) => {

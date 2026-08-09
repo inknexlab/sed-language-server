@@ -1,155 +1,11 @@
 import { MarkupKind } from "vscode-languageserver";
-import { rangeForNode, textForNode } from "./cst.js";
-
-const commandReferenceByVerb = Object.freeze({
-  "{": {
-    title: "Command Block",
-    synopsis: "[address[,address]]{ … }",
-    description:
-      "Executes the enclosed editing commands when the current pattern space is selected.",
-  },
-  a: {
-    title: "Append Text",
-    synopsis: "[address]a\\\ntext",
-    description:
-      "Schedules text for standard output before the next input fetch, before `q`, or at the end of the script.",
-  },
-  b: {
-    title: "Branch",
-    synopsis: "[address[,address]]b [label]",
-    description:
-      "Branches to label, or to the end of the script when label is omitted.",
-  },
-  c: {
-    title: "Change Text",
-    synopsis: "[address[,address]]c\\\ntext",
-    description:
-      "Deletes the pattern space, writes text once for the selected line or completed range, and starts the next cycle.",
-  },
-  d: {
-    title: "Delete",
-    synopsis: "[address[,address]]d",
-    description: "Deletes the pattern space and starts the next cycle.",
-  },
-  D: {
-    title: "Delete First Line",
-    synopsis: "[address[,address]]D",
-    description:
-      "Deletes through the first newline and restarts the cycle without reading input, or acts like `d` when no newline exists.",
-  },
-  g: {
-    title: "Get",
-    synopsis: "[address[,address]]g",
-    description: "Replaces the pattern space with the hold space.",
-  },
-  G: {
-    title: "Get and Append",
-    synopsis: "[address[,address]]G",
-    description: "Appends a newline and the hold space to the pattern space.",
-  },
-  h: {
-    title: "Hold",
-    synopsis: "[address[,address]]h",
-    description: "Replaces the hold space with the pattern space.",
-  },
-  H: {
-    title: "Hold and Append",
-    synopsis: "[address[,address]]H",
-    description: "Appends a newline and the pattern space to the hold space.",
-  },
-  i: {
-    title: "Insert Text",
-    synopsis: "[address]i\\\ntext",
-    description:
-      "Writes text to standard output before continuing with the selected pattern space.",
-  },
-  l: {
-    title: "List",
-    synopsis: "[address[,address]]l",
-    description:
-      "Writes an unambiguous escaped representation of the pattern space.",
-  },
-  n: {
-    title: "Next",
-    synopsis: "[address[,address]]n",
-    description:
-      "Writes the pattern space when default output is enabled, then replaces it with the next input line.",
-  },
-  N: {
-    title: "Append Next Line",
-    synopsis: "[address[,address]]N",
-    description:
-      "Appends a newline and the next input line to the pattern space.",
-  },
-  p: {
-    title: "Print",
-    synopsis: "[address[,address]]p",
-    description: "Writes the pattern space to standard output.",
-  },
-  P: {
-    title: "Print First Line",
-    synopsis: "[address[,address]]P",
-    description:
-      "Writes the first line of the pattern space to standard output.",
-  },
-  q: {
-    title: "Quit",
-    synopsis: "[address]q",
-    description:
-      "Branches to the end of the script and quits without starting a new cycle.",
-  },
-  r: {
-    title: "Read File",
-    synopsis: "[address]r rfile",
-    description:
-      "Schedules the contents of rfile to be written to standard output.",
-  },
-  s: {
-    title: "Substitute",
-    synopsis: "[address[,address]]s/RE/replacement/[flags]",
-    description:
-      "Replaces instances of RE in the pattern space according to flags.",
-  },
-  t: {
-    title: "Test and Branch",
-    synopsis: "[address[,address]]t [label]",
-    description:
-      "Branches to label if a substitution has occurred since the last input read or previous `t`, or to the end when label is omitted.",
-  },
-  w: {
-    title: "Write File",
-    synopsis: "[address[,address]]w wfile",
-    description: "Appends the pattern space to wfile.",
-  },
-  x: {
-    title: "Exchange",
-    synopsis: "[address[,address]]x",
-    description: "Exchanges the pattern and hold spaces.",
-  },
-  y: {
-    title: "Translate",
-    synopsis: "[address[,address]]y/string1/string2/",
-    description:
-      "Replaces each occurrence of a character in string1 with the corresponding character in string2.",
-  },
-  ":": {
-    title: "Label",
-    synopsis: ":label",
-    description:
-      "Defines a label for `b` and `t` without otherwise changing processing.",
-  },
-  "=": {
-    title: "Print Line Number",
-    synopsis: "[address]=",
-    description: "Writes the current input line number to standard output.",
-  },
-  "#": {
-    title: "Comment",
-    synopsis: "#comment",
-    description:
-      "Ignores the remainder of the line; `#n` as the first two script characters also suppresses default output.",
-  },
-});
+import { commandReferenceForVerb, referenceDocumentation } from "./catalog.js";
+import {
+  delimiterTokenFor,
+  isCompleteContextAddress,
+  rangeForNode,
+  textForNode,
+} from "./cst.js";
 
 const substitutionFlagReferenceByType = Object.freeze({
   occurrence_flag: {
@@ -249,7 +105,7 @@ const graphicDelimiterPattern = /^[\p{L}\p{N}\p{P}\p{S}]$/u;
 
 function directReferenceForNode(node, spelling) {
   return node.type === "function_verb"
-    ? commandReferenceByVerb[spelling]
+    ? commandReferenceForVerb(spelling)
     : substitutionFlagReferenceByType[node.type];
 }
 
@@ -259,19 +115,6 @@ function directTargetForNode(document, node) {
   return reference === undefined
     ? undefined
     : { node, display: spelling, reference };
-}
-
-function delimiterTokenFor(contextAddress, field) {
-  const delimiter = contextAddress.childForFieldName(field);
-  const token = delimiter?.childForFieldName("token");
-  return token?.type === "delimiter_token" ? token : undefined;
-}
-
-function isCompleteContextAddress(node) {
-  return (
-    delimiterTokenFor(node, "opening") !== undefined &&
-    delimiterTokenFor(node, "closing") !== undefined
-  );
 }
 
 function isExcessAddressElement(node) {
@@ -502,11 +345,17 @@ function inlineCode(value) {
   return `${fence} ${value} ${fence}`;
 }
 
-function markdownFor(display, reference) {
-  return `### ${inlineCode(display)} — ${reference.title}\n\n\`\`\`sed\n${reference.synopsis}\n\`\`\`\n\n${reference.description}`;
+function contentsFor(display, reference, kind) {
+  const markupKind = kind === null ? MarkupKind.Markdown : kind;
+  const documentation = referenceDocumentation(reference, markupKind);
+  const value =
+    markupKind === MarkupKind.Markdown
+      ? `### ${inlineCode(display)} — ${reference.title}\n\n${documentation.value}`
+      : `${display} — ${reference.title}\n\n${documentation.value}`;
+  return kind === null ? value : { kind, value };
 }
 
-export function hover(snapshot, position) {
+export function hover(snapshot, position, contentKind) {
   const { document, tree } = snapshot;
   const offset = document.offsetAt(position);
   const root = tree.rootNode;
@@ -523,10 +372,7 @@ export function hover(snapshot, position) {
     return undefined;
   }
   return {
-    contents: {
-      kind: MarkupKind.Markdown,
-      value: markdownFor(target.display, target.reference),
-    },
+    contents: contentsFor(target.display, target.reference, contentKind),
     range: rangeForNode(document, target.node),
   };
 }

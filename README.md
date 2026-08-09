@@ -14,12 +14,13 @@ npm install --global @inknexlab/sed-language-server
 
 ## Features
 
+- Completion
 - Diagnostics
-- Document Formatting
 - Find References
+- Formatting
 - Go to Definition
-- Rename labels
-- Syntax reference hover
+- Rename
+- Hover
 
 ## Emacs
 

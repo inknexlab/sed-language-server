@@ -4,12 +4,14 @@ import {
   createConnection,
   ErrorCodes,
   LSPErrorCodes,
+  MarkupKind,
   PositionEncodingKind,
   ResponseError,
   TextDocumentSyncKind,
   TextDocuments,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
+import { completionItems } from "./completion.js";
 import { diagnostics } from "./diagnostics.js";
 import { formattingEdits } from "./formatting.js";
 import { hover } from "./hover.js";
@@ -28,6 +30,19 @@ if (process.argv.length === 2) {
 
 const connection = createConnection();
 let syntaxStore;
+let completionDocumentationKind = preferredMarkupKind();
+let hoverContentKind = preferredMarkupKind();
+
+function preferredMarkupKind(formats) {
+  if (Array.isArray(formats)) {
+    for (const format of formats) {
+      if (format === MarkupKind.Markdown || format === MarkupKind.PlainText) {
+        return format;
+      }
+    }
+  }
+  return null;
+}
 
 function initializationMode(options) {
   if (options === undefined) {
@@ -90,8 +105,14 @@ const documents = new TextDocuments({
   },
 });
 
-connection.onInitialize(async ({ initializationOptions }) => {
+connection.onInitialize(async ({ capabilities, initializationOptions }) => {
   const mode = initializationMode(initializationOptions);
+  completionDocumentationKind = preferredMarkupKind(
+    capabilities.textDocument?.completion?.completionItem?.documentationFormat,
+  );
+  hoverContentKind = preferredMarkupKind(
+    capabilities.textDocument?.hover?.contentFormat,
+  );
   syntaxStore = await SyntaxStore.create(mode);
   return {
     capabilities: {
@@ -100,6 +121,7 @@ connection.onInitialize(async ({ initializationOptions }) => {
         openClose: true,
         change: TextDocumentSyncKind.Incremental,
       },
+      completionProvider: {},
       definitionProvider: true,
       referencesProvider: true,
       hoverProvider: true,
@@ -129,6 +151,13 @@ documents.onDidClose(({ document }) => {
   });
 });
 
+connection.onCompletion(({ textDocument, position }) => {
+  const current = snapshot(textDocument.uri);
+  return current === undefined
+    ? []
+    : completionItems(current, position, completionDocumentationKind);
+});
+
 connection.onDefinition(({ textDocument, position }) => {
   const current = snapshot(textDocument.uri);
   if (current === undefined) {
@@ -140,7 +169,9 @@ connection.onDefinition(({ textDocument, position }) => {
 
 connection.onHover(({ textDocument, position }) => {
   const current = snapshot(textDocument.uri);
-  return current === undefined ? null : (hover(current, position) ?? null);
+  return current === undefined
+    ? null
+    : (hover(current, position, hoverContentKind) ?? null);
 });
 
 connection.onReferences(({ textDocument, position, context }) => {
@@ -182,11 +213,15 @@ connection.onDocumentFormatting(({ textDocument, options }) => {
 connection.onShutdown(() => {
   syntaxStore?.dispose();
   syntaxStore = undefined;
+  completionDocumentationKind = preferredMarkupKind();
+  hoverContentKind = preferredMarkupKind();
 });
 
 connection.onExit(() => {
   syntaxStore?.dispose();
   syntaxStore = undefined;
+  completionDocumentationKind = preferredMarkupKind();
+  hoverContentKind = preferredMarkupKind();
 });
 
 documents.listen(connection);

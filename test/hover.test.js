@@ -406,13 +406,45 @@ const formatDelimiterReference = {
   description: "Inserts the substitution delimiter as a literal character.",
 };
 
+test("renders reference hover as plain text", async () => {
+  await withStore((store) => {
+    const snapshot = store.open(documentFor("a\\\ntext\n"));
+    assert.deepEqual(
+      hover(snapshot, { line: 0, character: 0 }, MarkupKind.PlainText),
+      {
+        contents: {
+          kind: MarkupKind.PlainText,
+          value:
+            "a — Append Text\n\n[address]a\\\ntext\n\nSchedules text for standard output before the next input fetch, before q, or at the end of the script.",
+        },
+        range: rangeAt(0),
+      },
+    );
+    assert.throws(
+      () => hover(snapshot, { line: 0, character: 0 }),
+      /Unsupported markup kind/,
+    );
+  });
+});
+
+test("renders legacy reference hover as a MarkedString", async () => {
+  await withStore((store) => {
+    const snapshot = store.open(documentFor("a\\\ntext\n"));
+    assert.deepEqual(hover(snapshot, { line: 0, character: 0 }, null), {
+      contents:
+        "### `a` — Append Text\n\n```sed\n[address]a\\\ntext\n```\n\nSchedules text for standard output before the next input fetch, before `q`, or at the end of the script.",
+      range: rangeAt(0),
+    });
+  });
+});
+
 test("documents every POSIX command verb with its exact source range", async () => {
   await withStore((store) => {
     for (const reference of commandReferences) {
       const character = reference.character ?? 0;
       const snapshot = store.open(documentFor(reference.source));
       assert.deepEqual(
-        hover(snapshot, { line: 0, character }),
+        hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
         expectedHover(reference, rangeAt(character)),
         reference.verb,
       );
@@ -427,7 +459,7 @@ test("documents every POSIX substitution flag with its exact source range", asyn
       const positions = reference.positions ?? [reference.character];
       for (const character of positions) {
         assert.deepEqual(
-          hover(snapshot, { line: 0, character }),
+          hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
           expectedHover(
             reference,
             rangeAt(reference.character, reference.length),
@@ -445,7 +477,7 @@ test("documents every POSIX substitution flag with its exact source range", asyn
       { line: 1, character: 0 },
     ]) {
       assert.equal(
-        hover(snapshot, position),
+        hover(snapshot, position, MarkupKind.Markdown),
         undefined,
         JSON.stringify(position),
       );
@@ -458,28 +490,28 @@ test("documents every atomic address element with its exact source range", async
     const snapshot = store.open(documentFor("001,$!p\n"));
     for (const character of [0, 1, 2]) {
       assert.deepEqual(
-        hover(snapshot, { line: 0, character }),
+        hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
         expectedHover(lineNumberAddressReference, rangeAt(0, 3)),
         `line number at ${character}`,
       );
     }
     assert.deepEqual(
-      hover(snapshot, { line: 0, character: 3 }),
+      hover(snapshot, { line: 0, character: 3 }, MarkupKind.Markdown),
       expectedHover(addressRangeReference, rangeAt(3)),
     );
     assert.deepEqual(
-      hover(snapshot, { line: 0, character: 4 }),
+      hover(snapshot, { line: 0, character: 4 }, MarkupKind.Markdown),
       expectedHover(lastLineAddressReference, rangeAt(4)),
     );
     assert.deepEqual(
-      hover(snapshot, { line: 0, character: 5 }),
+      hover(snapshot, { line: 0, character: 5 }, MarkupKind.Markdown),
       expectedHover(negationReference, rangeAt(5)),
     );
     for (const position of [
       { line: 0, character: 7 },
       { line: 1, character: 0 },
     ]) {
-      assert.equal(hover(snapshot, position), undefined);
+      assert.equal(hover(snapshot, position, MarkupKind.Markdown), undefined);
     }
   });
 });
@@ -490,14 +522,14 @@ test("documents complete and empty context addresses only at delimiters", async 
     const contextReference = contextAddressReference("/RE/");
     for (const character of [0, 5]) {
       assert.deepEqual(
-        hover(snapshot, { line: 0, character }),
+        hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
         expectedHover(contextReference, rangeAt(0, 6)),
         `context delimiter at ${character}`,
       );
     }
     for (const character of [1, 2, 3, 4, 7]) {
       assert.equal(
-        hover(snapshot, { line: 0, character }),
+        hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
         undefined,
         `context interior at ${character}`,
       );
@@ -506,7 +538,7 @@ test("documents complete and empty context addresses only at delimiters", async 
     const emptyReference = emptyRegularExpressionReference("//");
     for (const character of [8, 9]) {
       assert.deepEqual(
-        hover(snapshot, { line: 0, character }),
+        hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
         expectedHover(emptyReference, rangeAt(8, 2)),
         `empty expression at ${character}`,
       );
@@ -515,7 +547,7 @@ test("documents complete and empty context addresses only at delimiters", async 
       { line: 0, character: 11 },
       { line: 1, character: 0 },
     ]) {
-      assert.equal(hover(snapshot, position), undefined);
+      assert.equal(hover(snapshot, position, MarkupKind.Markdown), undefined);
     }
   });
 });
@@ -526,24 +558,33 @@ test("normalizes alternative address delimiters across UTF-16 positions", async 
     const astralReference = contextAddressReference("\\😀RE😀");
     for (const character of [0, 1, 2, 4, 5]) {
       assert.deepEqual(
-        hover(astral, { line: 0, character }),
+        hover(astral, { line: 0, character }, MarkupKind.Markdown),
         expectedHover(astralReference, rangeAt(0, 6)),
         `astral delimiter at ${character}`,
       );
     }
-    assert.equal(hover(astral, { line: 0, character: 3 }), undefined);
-    assert.equal(hover(astral, { line: 0, character: 7 }), undefined);
+    assert.equal(
+      hover(astral, { line: 0, character: 3 }, MarkupKind.Markdown),
+      undefined,
+    );
+    assert.equal(
+      hover(astral, { line: 0, character: 7 }, MarkupKind.Markdown),
+      undefined,
+    );
 
     const backtick = store.open(documentFor("\\``p\n"));
     const backtickReference = emptyRegularExpressionReference("\\``");
     for (const character of [0, 1, 2]) {
       assert.deepEqual(
-        hover(backtick, { line: 0, character }),
+        hover(backtick, { line: 0, character }, MarkupKind.Markdown),
         expectedHover(backtickReference, rangeAt(0, 3)),
         `backtick delimiter at ${character}`,
       );
     }
-    assert.equal(hover(backtick, { line: 0, character: 4 }), undefined);
+    assert.equal(
+      hover(backtick, { line: 0, character: 4 }, MarkupKind.Markdown),
+      undefined,
+    );
   });
 });
 
@@ -559,41 +600,52 @@ test("keeps concrete address syntax and excludes recovery artifacts", async () =
         spelling,
       };
       assert.deepEqual(
-        hover(missingSeparator, { line: 0, character }),
+        hover(missingSeparator, { line: 0, character }, MarkupKind.Markdown),
         expectedHover(reference, rangeAt(character)),
       );
     }
-    assert.equal(hover(missingSeparator, { line: 0, character: 1 }), undefined);
+    assert.equal(
+      hover(missingSeparator, { line: 0, character: 1 }, MarkupKind.Markdown),
+      undefined,
+    );
 
     const blanksAroundSeparator = store.open(documentFor("1 , 2p\n"));
     assert.deepEqual(
-      hover(blanksAroundSeparator, { line: 0, character: 2 }),
+      hover(
+        blanksAroundSeparator,
+        { line: 0, character: 2 },
+        MarkupKind.Markdown,
+      ),
       expectedHover(addressRangeReference, rangeAt(2)),
     );
 
     const commandWithOneAddress = store.open(documentFor("1,2q\n"));
     assert.deepEqual(
-      hover(commandWithOneAddress, { line: 0, character: 1 }),
+      hover(
+        commandWithOneAddress,
+        { line: 0, character: 1 },
+        MarkupKind.Markdown,
+      ),
       expectedHover(addressRangeReference, rangeAt(1)),
     );
 
     const duplicateNegation = store.open(documentFor("!!p\n"));
     assert.deepEqual(
-      hover(duplicateNegation, { line: 0, character: 0 }),
+      hover(duplicateNegation, { line: 0, character: 0 }, MarkupKind.Markdown),
       expectedHover(negationReference, rangeAt(0)),
     );
     assert.equal(
-      hover(duplicateNegation, { line: 0, character: 1 }),
+      hover(duplicateNegation, { line: 0, character: 1 }, MarkupKind.Markdown),
       undefined,
     );
 
     const blankAfterNegation = store.open(documentFor("! p\n"));
     assert.deepEqual(
-      hover(blankAfterNegation, { line: 0, character: 0 }),
+      hover(blankAfterNegation, { line: 0, character: 0 }, MarkupKind.Markdown),
       expectedHover(negationReference, rangeAt(0)),
     );
     assert.equal(
-      hover(blankAfterNegation, { line: 0, character: 1 }),
+      hover(blankAfterNegation, { line: 0, character: 1 }, MarkupKind.Markdown),
       undefined,
     );
 
@@ -611,7 +663,7 @@ test("keeps concrete address syntax and excludes recovery artifacts", async () =
       const snapshot = store.open(documentFor(source));
       for (const character of characters) {
         assert.equal(
-          hover(snapshot, { line: 0, character }),
+          hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
           undefined,
           `${JSON.stringify(source)} at ${character}`,
         );
@@ -632,7 +684,7 @@ test("prefers concrete syntax over zero-width recovery at the same position", as
     for (const [source, reference] of cases) {
       const snapshot = store.open(documentFor(source));
       assert.deepEqual(
-        hover(snapshot, { line: 0, character: 1 }),
+        hover(snapshot, { line: 0, character: 1 }, MarkupKind.Markdown),
         expectedHover(reference, rangeAt(1)),
         source,
       );
@@ -662,7 +714,7 @@ test("documents every portable replacement special element with exact ranges", a
         character += 1
       ) {
         assert.deepEqual(
-          hover(snapshot, { line: 0, character }),
+          hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
           expectedHover(
             reference,
             rangeAt(reference.character, reference.length),
@@ -682,7 +734,7 @@ test("documents every portable replacement special element with exact ranges", a
       { line: 1, character: 0 },
     ]) {
       assert.equal(
-        hover(snapshot, position),
+        hover(snapshot, position, MarkupKind.Markdown),
         undefined,
         JSON.stringify(position),
       );
@@ -692,11 +744,14 @@ test("documents every portable replacement special element with exact ranges", a
     const firstBackReference = backReference(1, 4);
     for (const character of [4, 5]) {
       assert.deepEqual(
-        hover(followedByDigit, { line: 0, character }),
+        hover(followedByDigit, { line: 0, character }, MarkupKind.Markdown),
         expectedHover(firstBackReference, rangeAt(4, 2)),
       );
     }
-    assert.equal(hover(followedByDigit, { line: 0, character: 6 }), undefined);
+    assert.equal(
+      hover(followedByDigit, { line: 0, character: 6 }, MarkupKind.Markdown),
+      undefined,
+    );
   });
 });
 
@@ -728,7 +783,7 @@ test("documents digit, astral, and backtick replacement delimiters", async () =>
         character += 1
       ) {
         assert.deepEqual(
-          hover(snapshot, { line: 0, character }),
+          hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
           expectedHover(
             reference,
             rangeAt(reference.character, reference.length),
@@ -738,7 +793,7 @@ test("documents digit, astral, and backtick replacement delimiters", async () =>
       }
       for (const character of unsupportedCharacters) {
         assert.equal(
-          hover(snapshot, { line: 0, character }),
+          hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
           undefined,
           `${source} at ${character}`,
         );
@@ -758,7 +813,7 @@ test("renders a carriage-return delimiter safely over its source range", async (
       { line: 2, character: 0 },
       { line: 2, character: 1 },
     ]) {
-      const result = hover(snapshot, position);
+      const result = hover(snapshot, position, MarkupKind.Markdown);
       assert.deepEqual(
         result,
         expectedHover(carriageReturnDelimiterReference, range),
@@ -773,7 +828,11 @@ test("renders an invisible Unicode delimiter without formatting controls", async
   await withStore((store) => {
     const snapshot = store.open(documentFor("s\u202aa\u202a\\\u202a\u202a"));
     for (const character of [4, 5]) {
-      const result = hover(snapshot, { line: 0, character });
+      const result = hover(
+        snapshot,
+        { line: 0, character },
+        MarkupKind.Markdown,
+      );
       assert.deepEqual(
         result,
         expectedHover(formatDelimiterReference, rangeAt(4, 2)),
@@ -795,14 +854,14 @@ test("ranges an embedded newline and following reference across UTF-16 lines", a
       { line: 0, character: 7 },
     ]) {
       assert.deepEqual(
-        hover(snapshot, position),
+        hover(snapshot, position, MarkupKind.Markdown),
         expectedHover(embeddedNewlineReference, newlineRange),
         JSON.stringify(position),
       );
     }
 
     assert.deepEqual(
-      hover(snapshot, { line: 1, character: 0 }),
+      hover(snapshot, { line: 1, character: 0 }, MarkupKind.Markdown),
       expectedHover(matchedTextReference, rangeAt(0, 1, 1)),
     );
     for (const position of [
@@ -812,7 +871,7 @@ test("ranges an embedded newline and following reference across UTF-16 lines", a
       { line: 1, character: 2 },
     ]) {
       assert.equal(
-        hover(snapshot, position),
+        hover(snapshot, position, MarkupKind.Markdown),
         undefined,
         JSON.stringify(position),
       );
@@ -824,19 +883,19 @@ test("keeps valid replacement elements through missing-delimiter recovery", asyn
   await withStore((store) => {
     const snapshot = store.open(documentFor("s|a|&\\1\\q\\"));
     assert.deepEqual(
-      hover(snapshot, { line: 0, character: 4 }),
+      hover(snapshot, { line: 0, character: 4 }, MarkupKind.Markdown),
       expectedHover(matchedTextReference, rangeAt(4)),
     );
     const reference = backReference(1, 5);
     for (const character of [5, 6]) {
       assert.deepEqual(
-        hover(snapshot, { line: 0, character }),
+        hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
         expectedHover(reference, rangeAt(5, 2)),
       );
     }
     for (const character of [7, 8, 9, 10]) {
       assert.equal(
-        hover(snapshot, { line: 0, character }),
+        hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
         undefined,
         String(character),
       );
@@ -844,13 +903,16 @@ test("keeps valid replacement elements through missing-delimiter recovery", asyn
 
     const zero = store.open(documentFor("s/a/\\0/"));
     for (const character of [4, 5]) {
-      assert.equal(hover(zero, { line: 0, character }), undefined);
+      assert.equal(
+        hover(zero, { line: 0, character }, MarkupKind.Markdown),
+        undefined,
+      );
     }
 
     const ampersandDelimiter = store.open(documentFor("s&x&\\&&"));
     for (const character of [4, 5]) {
       assert.equal(
-        hover(ampersandDelimiter, { line: 0, character }),
+        hover(ampersandDelimiter, { line: 0, character }, MarkupKind.Markdown),
         undefined,
       );
     }
@@ -864,28 +926,28 @@ test("does not confuse replacement elements with regex or translation syntax", a
     );
     for (const character of [1, 2, 3, 4, 5, 6, 7, 13]) {
       assert.equal(
-        hover(snapshot, { line: 0, character }),
+        hover(snapshot, { line: 0, character }, MarkupKind.Markdown),
         undefined,
         `regex at ${character}`,
       );
     }
 
     assert.deepEqual(
-      hover(snapshot, { line: 0, character: 8 }),
+      hover(snapshot, { line: 0, character: 8 }, MarkupKind.Markdown),
       expectedHover(matchedTextReference, rangeAt(8)),
     );
     assert.deepEqual(
-      hover(snapshot, { line: 0, character: 9 }),
+      hover(snapshot, { line: 0, character: 9 }, MarkupKind.Markdown),
       expectedHover(backReference(1, 9), rangeAt(9, 2)),
     );
     assert.deepEqual(
-      hover(snapshot, { line: 0, character: 11 }),
+      hover(snapshot, { line: 0, character: 11 }, MarkupKind.Markdown),
       expectedHover(delimiterReference("|", 11), rangeAt(11, 2)),
     );
 
     for (const character of [1, 2, 3, 4, 5, 6, 7]) {
       assert.equal(
-        hover(snapshot, { line: 1, character }),
+        hover(snapshot, { line: 1, character }, MarkupKind.Markdown),
         undefined,
         `translation at ${character}`,
       );
@@ -912,7 +974,7 @@ test("does not confuse documented syntax with surrounding text", async () => {
     ];
     for (const position of unsupportedPositions) {
       assert.equal(
-        hover(snapshot, position),
+        hover(snapshot, position, MarkupKind.Markdown),
         undefined,
         JSON.stringify(position),
       );
@@ -923,15 +985,22 @@ test("does not confuse documented syntax with surrounding text", async () => {
     );
     assert.notEqual(printFlag, undefined);
     assert.deepEqual(
-      hover(snapshot, { line: 0, character: 9 }),
+      hover(snapshot, { line: 0, character: 9 }, MarkupKind.Markdown),
       expectedHover(printFlag, rangeAt(9)),
     );
 
-    const adjacent = hover(snapshot, { line: 2, character: 1 });
+    const adjacent = hover(
+      snapshot,
+      { line: 2, character: 1 },
+      MarkupKind.Markdown,
+    );
     assert.match(adjacent?.contents.value ?? "", /^### `p` — Print$/m);
 
     const finalVerb = store.open(documentFor("d"));
-    assert.equal(hover(finalVerb, { line: 0, character: 1 }), undefined);
+    assert.equal(
+      hover(finalVerb, { line: 0, character: 1 }, MarkupKind.Markdown),
+      undefined,
+    );
   });
 });
 
@@ -944,7 +1013,7 @@ test("keeps valid flags and excludes invalid recovery artifacts", async () => {
     for (const source of ["s/a/b/w\n", "s/a/b/woutput\n"]) {
       const snapshot = store.open(documentFor(source));
       assert.deepEqual(
-        hover(snapshot, { line: 0, character: 6 }),
+        hover(snapshot, { line: 0, character: 6 }, MarkupKind.Markdown),
         expectedHover(writeFlag, rangeAt(6)),
         source,
       );
@@ -953,7 +1022,7 @@ test("keeps valid flags and excludes invalid recovery artifacts", async () => {
     const invalid = store.open(documentFor("s/a/b/000z\n"));
     for (const character of [6, 7, 8, 9]) {
       assert.equal(
-        hover(invalid, { line: 0, character }),
+        hover(invalid, { line: 0, character }, MarkupKind.Markdown),
         undefined,
         String(character),
       );
@@ -965,7 +1034,7 @@ test("keeps valid flags and excludes invalid recovery artifacts", async () => {
     assert.notEqual(globalFlag, undefined);
     const nativeRecovery = store.open(documentFor("{;s/a/b/g}"));
     assert.deepEqual(
-      hover(nativeRecovery, { line: 0, character: 8 }),
+      hover(nativeRecovery, { line: 0, character: 8 }, MarkupKind.Markdown),
       expectedHover(globalFlag, rangeAt(8)),
     );
   });
@@ -977,7 +1046,7 @@ test("keeps known verbs through structured and native parser recovery", async ()
     assert.notEqual(readReference, undefined);
     const incompleteRead = store.open(documentFor("r\n"));
     assert.deepEqual(
-      hover(incompleteRead, { line: 0, character: 0 }),
+      hover(incompleteRead, { line: 0, character: 0 }, MarkupKind.Markdown),
       expectedHover(readReference, rangeAt(0)),
     );
 
@@ -985,17 +1054,24 @@ test("keeps known verbs through structured and native parser recovery", async ()
     assert.notEqual(blockReference, undefined);
     const nativeRecovery = store.open(documentFor("{;p}"));
     assert.deepEqual(
-      hover(nativeRecovery, { line: 0, character: 0 }),
+      hover(nativeRecovery, { line: 0, character: 0 }, MarkupKind.Markdown),
       expectedHover(blockReference, rangeAt(0)),
     );
     assert.match(
-      hover(nativeRecovery, { line: 0, character: 2 })?.contents.value ?? "",
+      hover(nativeRecovery, { line: 0, character: 2 }, MarkupKind.Markdown)
+        ?.contents.value ?? "",
       /^### `p` — Print$/m,
     );
-    assert.equal(hover(nativeRecovery, { line: 0, character: 3 }), undefined);
+    assert.equal(
+      hover(nativeRecovery, { line: 0, character: 3 }, MarkupKind.Markdown),
+      undefined,
+    );
 
     const unknown = store.open(documentFor("k tail\n"));
-    assert.equal(hover(unknown, { line: 0, character: 0 }), undefined);
+    assert.equal(
+      hover(unknown, { line: 0, character: 0 }, MarkupKind.Markdown),
+      undefined,
+    );
   });
 });
 
@@ -1007,14 +1083,14 @@ test("resolves UTF-16 positions after an astral character", async () => {
     assert.notEqual(globalFlag, undefined);
     const snapshot = store.open(documentFor("s/😀/x/g;p"));
     assert.deepEqual(
-      hover(snapshot, { line: 0, character: 7 }),
+      hover(snapshot, { line: 0, character: 7 }, MarkupKind.Markdown),
       expectedHover(globalFlag, rangeAt(7)),
     );
 
     const printCommand = commandReferences.find(({ verb }) => verb === "p");
     assert.notEqual(printCommand, undefined);
     assert.deepEqual(
-      hover(snapshot, { line: 0, character: 9 }),
+      hover(snapshot, { line: 0, character: 9 }, MarkupKind.Markdown),
       expectedHover(printCommand, rangeAt(9)),
     );
   });

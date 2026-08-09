@@ -42,12 +42,17 @@ function notification(connection, method, predicate) {
   });
 }
 
-async function initialize(connection, initializationOptions) {
+async function initialize(
+  connection,
+  initializationOptions,
+  textDocumentCapabilities = {},
+) {
   const result = await connection.sendRequest("initialize", {
     processId: null,
     rootUri: null,
     capabilities: {
       general: { positionEncodings: ["utf-16"] },
+      textDocument: textDocumentCapabilities,
     },
     initializationOptions,
   });
@@ -85,7 +90,18 @@ async function stopServer(server) {
 test("serves the complete document lifecycle over default stdio", async (t) => {
   const server = startServer();
   t.after(async () => stopServer(server));
-  const initialized = await initialize(server.connection, {});
+  const initialized = await initialize(
+    server.connection,
+    {},
+    {
+      completion: {
+        completionItem: {
+          documentationFormat: ["markdown", "plaintext"],
+        },
+      },
+      hover: { contentFormat: ["markdown", "plaintext"] },
+    },
+  );
   assert.equal(initialized.capabilities.positionEncoding, "utf-16");
   assert.deepEqual(initialized.capabilities.textDocumentSync, {
     openClose: true,
@@ -94,7 +110,16 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
   assert.deepEqual(initialized.capabilities.renameProvider, {
     prepareProvider: true,
   });
+  assert.deepEqual(initialized.capabilities.completionProvider, {});
   assert.equal(initialized.capabilities.hoverProvider, true);
+
+  assert.deepEqual(
+    await server.connection.sendRequest("textDocument/completion", {
+      textDocument: { uri: "file:///unopened.sed" },
+      position: { line: 0, character: 0 },
+    }),
+    [],
+  );
 
   assert.equal(
     await server.connection.sendRequest("textDocument/hover", {
@@ -163,6 +188,26 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
         end: { line: 3, character: 1 },
       },
     },
+  );
+
+  assert.deepEqual(
+    await server.connection.sendRequest("textDocument/completion", {
+      textDocument: { uri },
+      position: { line: 2, character: 4 },
+    }),
+    [
+      {
+        label: "target",
+        kind: 18,
+        textEdit: {
+          range: {
+            start: { line: 2, character: 2 },
+            end: { line: 2, character: 8 },
+          },
+          newText: "target",
+        },
+      },
+    ],
   );
 
   assert.deepEqual(
@@ -258,6 +303,171 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
   });
   assert.equal((await closed).version, 2);
   assert.equal(server.stderr(), "");
+});
+
+test("uses the client's preferred markup for hover and completion", async (t) => {
+  const server = startServer();
+  t.after(async () => stopServer(server));
+  await initialize(
+    server.connection,
+    {},
+    {
+      completion: {
+        completionItem: {
+          documentationFormat: ["plaintext", "markdown"],
+        },
+      },
+      hover: { contentFormat: ["plaintext", "markdown"] },
+    },
+  );
+
+  const uri = "file:///plaintext.sed";
+  const published = notification(
+    server.connection,
+    "textDocument/publishDiagnostics",
+    ({ uri: received }) => received === uri,
+  );
+  server.connection.sendNotification("textDocument/didOpen", {
+    textDocument: {
+      uri,
+      languageId: "sed",
+      version: 1,
+      text: "D;",
+    },
+  });
+  assert.deepEqual((await published).diagnostics, []);
+
+  assert.deepEqual(
+    await server.connection.sendRequest("textDocument/hover", {
+      textDocument: { uri },
+      position: { line: 0, character: 0 },
+    }),
+    {
+      contents: {
+        kind: "plaintext",
+        value:
+          "D — Delete First Line\n\n[address[,address]]D\n\nDeletes through the first newline and restarts the cycle without reading input, or acts like d when no newline exists.",
+      },
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 1 },
+      },
+    },
+  );
+
+  const completions = await server.connection.sendRequest(
+    "textDocument/completion",
+    {
+      textDocument: { uri },
+      position: { line: 0, character: 2 },
+    },
+  );
+  assert.deepEqual(
+    completions.find(({ label }) => label === "D"),
+    {
+      label: "D",
+      kind: 14,
+      detail: "Delete First Line",
+      documentation: {
+        kind: "plaintext",
+        value:
+          "[address[,address]]D\n\nDeletes through the first newline and restarts the cycle without reading input, or acts like d when no newline exists.",
+      },
+      textEdit: {
+        range: {
+          start: { line: 0, character: 2 },
+          end: { line: 0, character: 2 },
+        },
+        newText: "D",
+      },
+    },
+  );
+  assert.equal(server.stderr(), "");
+});
+
+test("uses legacy strings when markup formats are not advertised", async (t) => {
+  const cases = [
+    { name: "unspecified", capabilities: {} },
+    {
+      name: "empty",
+      capabilities: {
+        completion: { completionItem: { documentationFormat: [] } },
+        hover: { contentFormat: [] },
+      },
+    },
+    {
+      name: "unsupported-only",
+      capabilities: {
+        completion: { completionItem: { documentationFormat: ["html"] } },
+        hover: { contentFormat: ["html"] },
+      },
+    },
+  ];
+
+  for (const { name, capabilities } of cases) {
+    await t.test(name, async (t) => {
+      const server = startServer();
+      t.after(async () => stopServer(server));
+      await initialize(server.connection, {}, capabilities);
+
+      const uri = `file:///legacy-markup-${name}.sed`;
+      const published = notification(
+        server.connection,
+        "textDocument/publishDiagnostics",
+        ({ uri: received }) => received === uri,
+      );
+      server.connection.sendNotification("textDocument/didOpen", {
+        textDocument: {
+          uri,
+          languageId: "sed",
+          version: 1,
+          text: "D;",
+        },
+      });
+      assert.deepEqual((await published).diagnostics, []);
+
+      assert.deepEqual(
+        await server.connection.sendRequest("textDocument/hover", {
+          textDocument: { uri },
+          position: { line: 0, character: 0 },
+        }),
+        {
+          contents:
+            "### `D` — Delete First Line\n\n```sed\n[address[,address]]D\n```\n\nDeletes through the first newline and restarts the cycle without reading input, or acts like `d` when no newline exists.",
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 1 },
+          },
+        },
+      );
+
+      const completions = await server.connection.sendRequest(
+        "textDocument/completion",
+        {
+          textDocument: { uri },
+          position: { line: 0, character: 2 },
+        },
+      );
+      assert.deepEqual(
+        completions.find(({ label }) => label === "D"),
+        {
+          label: "D",
+          kind: 14,
+          detail: "Delete First Line",
+          documentation:
+            "[address[,address]]D\n\nDeletes through the first newline and restarts the cycle without reading input, or acts like d when no newline exists.",
+          textEdit: {
+            range: {
+              start: { line: 0, character: 2 },
+              end: { line: 0, character: 2 },
+            },
+            newText: "D",
+          },
+        },
+      );
+      assert.equal(server.stderr(), "");
+    });
+  }
 });
 
 test("uses the fixed ERE grammar selected during initialization", async (t) => {

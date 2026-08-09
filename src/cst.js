@@ -68,6 +68,19 @@ export function rangeForNode(document, node) {
   };
 }
 
+export function delimiterTokenFor(contextAddress, field) {
+  const delimiter = contextAddress.childForFieldName(field);
+  const token = delimiter?.childForFieldName("token");
+  return token?.type === "delimiter_token" ? token : undefined;
+}
+
+export function isCompleteContextAddress(node) {
+  return (
+    delimiterTokenFor(node, "opening") !== undefined &&
+    delimiterTokenFor(node, "closing") !== undefined
+  );
+}
+
 export function functionForCommand(command) {
   const wrapper = command.childForFieldName("function");
   if (wrapper === null) {

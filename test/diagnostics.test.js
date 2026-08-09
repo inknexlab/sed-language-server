@@ -121,6 +121,33 @@ test("validates BRE pattern back-references against preceding groups", async () 
 });
 
 test("validates replacement back-references in BRE and ERE modes", async () => {
+  assert.deepEqual(await diagnosticsFor("s/a/\\0/\n"), [
+    {
+      range: {
+        start: { line: 0, character: 4 },
+        end: { line: 0, character: 6 },
+      },
+      severity: DiagnosticSeverity.Warning,
+      code: "unmatched-replacement-backreference",
+      source: "sed-language-server",
+      message:
+        "Replacement back-reference \\0 has no corresponding POSIX regular-expression subexpression.",
+    },
+  ]);
+  assert.deepEqual(await diagnosticsFor("q\ns/a/\\0/\n"), [
+    {
+      range: {
+        start: { line: 1, character: 4 },
+        end: { line: 1, character: 6 },
+      },
+      severity: DiagnosticSeverity.Warning,
+      code: "unmatched-replacement-backreference",
+      source: "sed-language-server",
+      message:
+        "Replacement back-reference \\0 has no corresponding POSIX regular-expression subexpression.",
+    },
+  ]);
+
   const cases = [
     ["bre", "s/\\(a\\)/\\2/\n"],
     ["ere", "s/(a)/\\2/\n"],

@@ -593,6 +593,21 @@ function patternBackreferenceDiagnostics(snapshot) {
   return result;
 }
 
+function zeroReplacementBackreferenceDiagnostics(snapshot) {
+  const { document, tree } = snapshot;
+  return descendants(tree.rootNode, "replacement_backreference")
+    .filter((reference) => textForNode(document, reference).at(-1) === "0")
+    .map((reference) =>
+      diagnosticForNode(
+        document,
+        reference,
+        DiagnosticSeverity.Warning,
+        "unmatched-replacement-backreference",
+        "Replacement back-reference \\0 has no corresponding POSIX regular-expression subexpression.",
+      ),
+    );
+}
+
 function intervalDiagnostics(snapshot) {
   const { document, tree } = snapshot;
   const result = [];
@@ -1141,6 +1156,7 @@ function replacementTransfer(snapshot, substitute, input, report) {
   )) {
     const number = Number(textForNode(snapshot.document, reference).at(-1));
     if (
+      number !== 0 &&
       [...state].some((value) => {
         const count = groupCountOf(value);
         return count === null || count < number;
@@ -1255,6 +1271,7 @@ function semanticDiagnostics(snapshot) {
   const symbols = labelSymbols(snapshot.document, snapshot.tree.rootNode);
   return [
     ...patternBackreferenceDiagnostics(snapshot),
+    ...zeroReplacementBackreferenceDiagnostics(snapshot),
     ...intervalDiagnostics(snapshot),
     ...substitutionFlagDiagnostics(snapshot),
     ...translationDiagnostics(snapshot),

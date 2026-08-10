@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  definitions,
-  prepareRename,
-  RenameError,
-  references,
-  rename,
-} from "../src/labels.js";
+import { definitions, references } from "../src/labels.js";
 import { SyntaxStore } from "../src/parser.js";
 import { documentFor } from "./helpers.js";
 
@@ -80,89 +74,8 @@ test("returns references in document order and honors includeDeclaration", async
   });
 });
 
-test("accepts the cursor immediately after a label", async () => {
-  await withSnapshot("bre", ":名前\nb 名前\n", (snapshot) => {
-    assert.deepEqual(prepareRename(snapshot, { line: 0, character: 3 }), {
-      range: {
-        start: { line: 0, character: 1 },
-        end: { line: 0, character: 3 },
-      },
-      placeholder: "名前",
-    });
-    assert.deepEqual(prepareRename(snapshot, { line: 1, character: 4 }), {
-      range: {
-        start: { line: 1, character: 2 },
-        end: { line: 1, character: 4 },
-      },
-      placeholder: "名前",
-    });
-  });
-});
-
 test("does not treat an omitted branch target as a label", async () => {
   await withSnapshot("bre", "b\nt\n", (snapshot) => {
-    assert.equal(prepareRename(snapshot, { line: 0, character: 1 }), undefined);
     assert.deepEqual(definitions(snapshot, { line: 1, character: 1 }), []);
-  });
-});
-
-test("renames every matching symbol with ordered non-overlapping edits", async () => {
-  await withSnapshot("ere", ":old\nb old\nt old\n", (snapshot) => {
-    assert.deepEqual(
-      rename(snapshot, { line: 1, character: 3 }, "new; value "),
-      {
-        changes: {
-          [snapshot.document.uri]: [
-            {
-              range: {
-                start: { line: 0, character: 1 },
-                end: { line: 0, character: 4 },
-              },
-              newText: "new; value ",
-            },
-            {
-              range: {
-                start: { line: 1, character: 2 },
-                end: { line: 1, character: 5 },
-              },
-              newText: "new; value ",
-            },
-            {
-              range: {
-                start: { line: 2, character: 2 },
-                end: { line: 2, character: 5 },
-              },
-              newText: "new; value ",
-            },
-          ],
-        },
-      },
-    );
-  });
-});
-
-test("rejects names that cannot be one grammar label", async () => {
-  await withSnapshot("bre", ":old\n", (snapshot) => {
-    const position = { line: 0, character: 2 };
-    for (const name of ["", "\0", "a\rb", "a\nb", " leading", "\tleading"]) {
-      assert.throws(
-        () => rename(snapshot, position, name),
-        RenameError,
-        JSON.stringify(name),
-      );
-    }
-  });
-});
-
-test("rejects collisions with another definition", async () => {
-  await withSnapshot("bre", ":old\n:new\nb old\n", (snapshot) => {
-    assert.throws(
-      () => rename(snapshot, { line: 2, character: 3 }, "new"),
-      /already defined/,
-    );
-    assert.throws(
-      () => rename(snapshot, { line: 0, character: 0 }, "name"),
-      /not on a sed label/,
-    );
   });
 });

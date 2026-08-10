@@ -3,7 +3,6 @@
 import {
   createConnection,
   ErrorCodes,
-  LSPErrorCodes,
   MarkupKind,
   PositionEncodingKind,
   ResponseError,
@@ -15,13 +14,7 @@ import { completionItems } from "./completion.js";
 import { diagnostics } from "./diagnostics.js";
 import { formattingEdits } from "./formatting.js";
 import { hover } from "./hover.js";
-import {
-  definitions,
-  prepareRename,
-  RenameError,
-  references,
-  rename,
-} from "./labels.js";
+import { definitions, references } from "./labels.js";
 import { regularExpressionModes, SyntaxStore } from "./parser.js";
 
 if (process.argv.length === 2) {
@@ -125,7 +118,6 @@ connection.onInitialize(async ({ capabilities, initializationOptions }) => {
       definitionProvider: true,
       referencesProvider: true,
       hoverProvider: true,
-      renameProvider: { prepareProvider: true },
       documentFormattingProvider: true,
     },
     serverInfo: {
@@ -180,29 +172,6 @@ connection.onReferences(({ textDocument, position, context }) => {
     return null;
   }
   return references(current, position, context.includeDeclaration);
-});
-
-connection.onPrepareRename(({ textDocument, position }) => {
-  const current = snapshot(textDocument.uri);
-  if (current === undefined) {
-    return null;
-  }
-  return prepareRename(current, position) ?? null;
-});
-
-connection.onRenameRequest(({ textDocument, position, newName }) => {
-  const current = snapshot(textDocument.uri);
-  if (current === undefined) {
-    return null;
-  }
-  try {
-    return rename(current, position, newName);
-  } catch (error) {
-    if (error instanceof RenameError) {
-      throw new ResponseError(LSPErrorCodes.RequestFailed, error.message);
-    }
-    throw error;
-  }
 });
 
 connection.onDocumentFormatting(({ textDocument, options }) => {

@@ -19,7 +19,6 @@ npm install --global @inknexlab/sed-language-server
 - Find References
 - Formatting
 - Go to Definition
-- Rename
 - Hover
 
 ## Emacs

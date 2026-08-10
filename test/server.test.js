@@ -107,9 +107,6 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
     openClose: true,
     change: 2,
   });
-  assert.deepEqual(initialized.capabilities.renameProvider, {
-    prepareProvider: true,
-  });
   assert.deepEqual(initialized.capabilities.completionProvider, {});
   assert.equal(initialized.capabilities.hoverProvider, true);
 
@@ -238,32 +235,6 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
       { line: 2, character: 2 },
     ],
   );
-  assert.deepEqual(
-    await server.connection.sendRequest("textDocument/prepareRename", {
-      textDocument: { uri },
-      position: { line: 2, character: 8 },
-    }),
-    {
-      range: {
-        start: { line: 2, character: 2 },
-        end: { line: 2, character: 8 },
-      },
-      placeholder: "target",
-    },
-  );
-  const renamed = await server.connection.sendRequest("textDocument/rename", {
-    textDocument: { uri },
-    position: { line: 2, character: 3 },
-    newName: "next",
-  });
-  assert.deepEqual(
-    renamed.changes[uri].map(({ newText, range }) => [newText, range.start]),
-    [
-      ["next", { line: 1, character: 1 }],
-      ["next", { line: 2, character: 2 }],
-    ],
-  );
-
   const formatted = await server.connection.sendRequest(
     "textDocument/formatting",
     {

@@ -47,12 +47,6 @@ server entry:
 
 The selected regular expression mode remains fixed for the server process.
 
-## Implementation
-
-Uses the POSIX CST from
-[tree-sitter-posix-sed](https://github.com/inknexlab/tree-sitter-posix-sed) for
-parsing.
-
 ## License
 
 [MIT](LICENSE)

@@ -1,27 +1,5 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { Language, Parser } from "web-tree-sitter";
-
-const vendorDirectory = new URL("../vendor/", import.meta.url);
-const manifest = JSON.parse(
-  readFileSync(new URL("tree-sitter-posix-sed.json", vendorDirectory), "utf8"),
-);
-const modes = Object.freeze(Object.keys(manifest.languages));
-let parserInitialization;
-
-function initializeParserRuntime() {
-  parserInitialization ??= Parser.init();
-  return parserInitialization;
-}
-
-function languageDefinition(mode) {
-  const definition = manifest.languages[mode];
-  if (definition === undefined) {
-    throw new TypeError(`Unsupported regular expression mode: ${mode}`);
-  }
-  return definition;
-}
+import { regularExpressionModes, SedParser } from "./analysis/index.js";
 
 function point({ character, line }) {
   return { row: line, column: character };
@@ -74,28 +52,11 @@ function copyDocument(document) {
   );
 }
 
-export function grammarManifest() {
-  return manifest;
-}
-
-export function regularExpressionModes() {
-  return modes;
-}
+export { regularExpressionModes };
 
 export class SyntaxStore {
   static async create(mode) {
-    const definition = languageDefinition(mode);
-    await initializeParserRuntime();
-    const wasmPath = fileURLToPath(new URL(definition.wasm, vendorDirectory));
-    const language = await Language.load(wasmPath);
-    if (language.name !== definition.language) {
-      throw new Error(
-        `Expected grammar ${definition.language}, loaded ${language.name ?? "an unnamed language"}.`,
-      );
-    }
-    const parser = new Parser();
-    parser.setLanguage(language);
-    return new SyntaxStore(mode, parser);
+    return new SyntaxStore(mode, await SedParser.create(mode));
   }
 
   #documents = new Map();
@@ -113,11 +74,7 @@ export class SyntaxStore {
   }
 
   #parse(source, oldTree) {
-    const tree = this.parser.parse(source, oldTree);
-    if (tree === null) {
-      throw new Error(`Failed to parse POSIX sed ${this.mode.toUpperCase()}.`);
-    }
-    return tree;
+    return this.parser.parse(source, oldTree);
   }
 
   #replace(uri, document, tree) {

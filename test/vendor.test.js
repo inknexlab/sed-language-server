@@ -1,27 +1,32 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { SyntaxStore } from "../src/parser.js";
-import { documentFor } from "./helpers.js";
+import { SedParser } from "../src/analysis/index.js";
 
 const variantIds = ["bre", "ere"];
-let stores = {};
+let parsers = {};
+const trees = [];
 
 before(async () => {
-  stores = Object.fromEntries(
+  parsers = Object.fromEntries(
     await Promise.all(
-      variantIds.map(async (mode) => [mode, await SyntaxStore.create(mode)]),
+      variantIds.map(async (mode) => [mode, await SedParser.create(mode)]),
     ),
   );
 });
 
 after(() => {
-  for (const store of Object.values(stores)) {
-    store.dispose();
+  for (const tree of trees) {
+    tree.delete();
+  }
+  for (const parser of Object.values(parsers)) {
+    parser.delete();
   }
 });
 
 function parse(mode, source) {
-  return stores[mode].open(documentFor(source)).tree;
+  const tree = parsers[mode].parse(source);
+  trees.push(tree);
+  return tree;
 }
 
 function nodes(tree, type) {

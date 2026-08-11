@@ -22,6 +22,10 @@ function defineSubstitutionFlag({ nodeType, title, synopsis, description }) {
   });
 }
 
+function defineReference(title, synopsis, description) {
+  return Object.freeze({ title, synopsis, description });
+}
+
 const commandReferenceList = Object.freeze([
   defineCommand({
     verb: "{",
@@ -270,10 +274,269 @@ const substitutionFlagReferenceByType = new Map(
   ]),
 );
 
+const addressReferences = Object.freeze({
+  line_number_address: defineReference(
+    "Line Number Address",
+    "number",
+    "Selects the input line with this cumulative line number across all input files.",
+  ),
+  last_line_address: defineReference(
+    "Last-Line Address",
+    "$",
+    "Selects the last line of input.",
+  ),
+  range: defineReference(
+    "Address Range",
+    "address1,address2",
+    "Selects each inclusive range from a pattern space selected by address1 through the next pattern space selected by address2; if address2 is a line number no greater than the first selected line number, only that first pattern space is selected.",
+  ),
+  negatedSelection: defineReference(
+    "Negated Selection",
+    "[address[,address]]!function",
+    "Inverts the address selection that controls whether the editing command is applied.",
+  ),
+});
+
+const replacementReferences = Object.freeze({
+  matched_text_reference: defineReference(
+    "Matched Text",
+    "s/RE/&/",
+    "Inserts the text matched by RE.",
+  ),
+  escaped_newline: defineReference(
+    "Embedded Newline",
+    "s/RE/first\\\nsecond/",
+    "Inserts a newline into the replacement.",
+  ),
+  "\\&": defineReference(
+    "Literal Ampersand",
+    "s/RE/\\&/",
+    "Inserts a literal ampersand instead of the text matched by RE.",
+  ),
+  "\\\\": defineReference(
+    "Literal Backslash",
+    "s/RE/\\\\/",
+    "Inserts a literal backslash.",
+  ),
+});
+
+const regularExpressionReferences = Object.freeze({
+  left_anchor: defineReference(
+    "Beginning Anchor",
+    "^RE",
+    "Matches only at the beginning of the string being searched.",
+  ),
+  right_anchor: defineReference(
+    "End Anchor",
+    "RE$",
+    "Matches only at the end of the string being searched.",
+  ),
+  wildcard: defineReference(
+    "Any-Character Expression",
+    ".",
+    "Matches any character in the supported character set except NUL.",
+  ),
+  zero_or_more_operator: defineReference(
+    "Zero-or-More Duplication",
+    "RE*",
+    "Matches zero or more consecutive occurrences of RE.",
+  ),
+  one_or_more_operator: defineReference(
+    "One-or-More Duplication",
+    "RE+",
+    "Matches one or more consecutive occurrences of RE.",
+  ),
+  zero_or_one_operator: defineReference(
+    "Zero-or-One Duplication",
+    "RE?",
+    "Matches zero or one occurrence of RE.",
+  ),
+  ere_alternation_operator: defineReference(
+    "Alternation",
+    "RE|RE",
+    "Matches either the expression on the left or the right.",
+  ),
+  bracket_expression: defineReference(
+    "Bracket Expression",
+    "[list]",
+    "Matches a character, and may match a multi-character collating element, represented by its non-empty list.",
+  ),
+  nonmatching_list: defineReference(
+    "Non-Matching List",
+    "[^list]",
+    "Makes the bracket expression match a character not represented by its list.",
+  ),
+  range_expression: defineReference(
+    "Range Expression",
+    "[start-end]",
+    "In the POSIX locale, represents the collating elements from start through end, inclusive; its behavior in other locales is unspecified.",
+  ),
+  character_class: defineReference(
+    "Character Class Expression",
+    "[[:class:]]",
+    "Represents the set of characters belonging to this locale-defined character class.",
+  ),
+  collating_symbol: defineReference(
+    "Collating Symbol",
+    "[[.element.]]",
+    "Represents this collating element as a single bracket-expression element.",
+  ),
+  equivalence_class: defineReference(
+    "Equivalence Class Expression",
+    "[[=element=]]",
+    "Represents the set of collating elements in the same equivalence class as this element.",
+  ),
+});
+
+function namedCharacterClassReference(name, title, description) {
+  return defineReference(
+    `${title} Character Class`,
+    `[[:${name}:]]`,
+    description,
+  );
+}
+
+const characterClassReferences = Object.freeze({
+  alnum: namedCharacterClassReference(
+    "alnum",
+    "Alphanumeric",
+    "Represents letters and decimal digits in the current locale.",
+  ),
+  alpha: namedCharacterClassReference(
+    "alpha",
+    "Alphabetic",
+    "Represents letters in the current locale.",
+  ),
+  blank: namedCharacterClassReference(
+    "blank",
+    "Blank",
+    "Represents blank characters in the current locale; in the POSIX locale, these are space and tab.",
+  ),
+  cntrl: namedCharacterClassReference(
+    "cntrl",
+    "Control",
+    "Represents control characters in the current locale.",
+  ),
+  digit: namedCharacterClassReference(
+    "digit",
+    "Decimal Digit",
+    "Represents exactly the decimal digits 0 through 9 in every locale.",
+  ),
+  graph: namedCharacterClassReference(
+    "graph",
+    "Graphical",
+    "Represents printable characters other than space in the current locale.",
+  ),
+  lower: namedCharacterClassReference(
+    "lower",
+    "Lowercase",
+    "Represents lowercase letters in the current locale.",
+  ),
+  print: namedCharacterClassReference(
+    "print",
+    "Printable",
+    "Represents printable characters, including space, in the current locale.",
+  ),
+  punct: namedCharacterClassReference(
+    "punct",
+    "Punctuation",
+    "Represents punctuation characters in the current locale.",
+  ),
+  space: namedCharacterClassReference(
+    "space",
+    "White-Space",
+    "Represents white-space characters; in the POSIX locale, these are space, tab, newline, carriage return, form feed, and vertical tab.",
+  ),
+  upper: namedCharacterClassReference(
+    "upper",
+    "Uppercase",
+    "Represents uppercase letters in the current locale.",
+  ),
+  xdigit: namedCharacterClassReference(
+    "xdigit",
+    "Hexadecimal Digit",
+    "Represents exactly 0 through 9, A through F, and a through f in every locale.",
+  ),
+});
+
 export function commandReferenceForVerb(verb) {
   return commandReferenceByVerb.get(verb);
 }
 
 export function substitutionFlagReferenceForType(nodeType) {
   return substitutionFlagReferenceByType.get(nodeType);
+}
+
+export function addressReference(kind, synopsis) {
+  if (kind === "contextAddress") {
+    return defineReference(
+      "Context Address",
+      synopsis,
+      "Selects each pattern space that matches RE; use /RE/ or \\cREc, where c is any character other than backslash or newline.",
+    );
+  }
+  if (kind === "emptyRegularExpression") {
+    return defineReference(
+      "Empty Regular Expression",
+      synopsis,
+      "Behaves as if the most recently applied regular expression from a context address or substitute command were specified.",
+    );
+  }
+  return addressReferences[kind];
+}
+
+export function replacementReference(kind, value) {
+  if (kind === "replacement_backreference") {
+    return defineReference(
+      "Back-Reference",
+      `s/RE/\\${value}/`,
+      `Inserts the text matched by regular-expression subexpression ${value}, or an empty string if that subexpression did not match.`,
+    );
+  }
+  if (kind === "replacement_escaped_delimiter") {
+    return defineReference(
+      "Literal Delimiter",
+      `s${value}RE${value}\\${value}${value}`,
+      "Inserts the substitution delimiter as a literal character.",
+    );
+  }
+  if (kind === "replacement_escape") {
+    return replacementReferences[value];
+  }
+  return replacementReferences[kind];
+}
+
+export function regularExpressionReference(kind, value) {
+  if (kind === "repetition_modifier") {
+    return defineReference(
+      "Minimal Repetition Modifier",
+      value,
+      "Makes the preceding duplication prefer the shortest match that permits the complete ERE to match.",
+    );
+  }
+  if (kind === "group") {
+    return defineReference(
+      "Subexpression",
+      value === "bre" ? "\\(RE\\)" : "(RE)",
+      "Groups RE as one expression; duplication applies to the group as a whole.",
+    );
+  }
+  if (kind === "interval") {
+    return defineReference(
+      "Interval Duplication",
+      value === "bre" ? "RE\\{m,n\\}" : "RE{m,n}",
+      "Matches a number of consecutive occurrences of RE within the interval's minimum and optional maximum bounds.",
+    );
+  }
+  if (kind === "backreference") {
+    return defineReference(
+      "Back-Reference",
+      `\\${value}`,
+      `Matches the same string matched by preceding BRE subexpression ${value}.`,
+    );
+  }
+  if (kind === "character_class") {
+    return characterClassReferences[value] ?? regularExpressionReferences[kind];
+  }
+  return regularExpressionReferences[kind];
 }

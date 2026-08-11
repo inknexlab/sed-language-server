@@ -960,7 +960,7 @@ test("does not confuse documented syntax with surrounding text", async () => {
   });
 });
 
-test("keeps valid flags and excludes invalid recovery artifacts", async () => {
+test("keeps valid flags outside invalid recovery subtrees", async () => {
   await withStore((store) => {
     const writeFlag = substitutionFlagReferences.find(
       ({ spelling }) => spelling === "w",
@@ -994,14 +994,17 @@ test("keeps valid flags and excludes invalid recovery artifacts", async () => {
     );
     assert.notEqual(globalFlag, undefined);
     const nativeRecovery = store.open("{;s/a/b/g}");
+    assert.equal(hover(nativeRecovery, { line: 0, character: 8 }), undefined);
+
+    const preserved = store.open("s/a/b/g;@\n");
     assert.deepEqual(
-      hover(nativeRecovery, { line: 0, character: 8 }),
-      expectedHover(globalFlag, rangeAt(8)),
+      hover(preserved, { line: 0, character: 6 }),
+      expectedHover(globalFlag, rangeAt(6)),
     );
   });
 });
 
-test("keeps known verbs through structured and native parser recovery", async () => {
+test("keeps known verbs outside recovery and omits native error subtrees", async () => {
   await withStore((store) => {
     const readReference = commandReferences.find(({ verb }) => verb === "r");
     assert.notEqual(readReference, undefined);
@@ -1014,16 +1017,24 @@ test("keeps known verbs through structured and native parser recovery", async ()
     const blockReference = commandReferences.find(({ verb }) => verb === "{");
     assert.notEqual(blockReference, undefined);
     const nativeRecovery = store.open("{;p}");
+    for (const character of [0, 2]) {
+      assert.equal(hover(nativeRecovery, { line: 0, character }), undefined);
+    }
+
+    const preserved = store.open("{;p}\np\n");
     assert.deepEqual(
-      hover(nativeRecovery, { line: 0, character: 0 }),
+      hover(preserved, { line: 0, character: 0 }),
       expectedHover(blockReference, rangeAt(0)),
     );
-    const nestedPrint = hover(nativeRecovery, { line: 0, character: 2 });
+    const nestedPrint = hover(preserved, { line: 0, character: 2 });
     assert.deepEqual(
       [nestedPrint?.documentation.display, nestedPrint?.documentation.title],
       ["p", "Print"],
     );
-    assert.equal(hover(nativeRecovery, { line: 0, character: 3 }), undefined);
+    assert.equal(
+      hover(preserved, { line: 1, character: 0 })?.documentation.title,
+      "Print",
+    );
 
     const unknown = store.open("k tail\n");
     assert.equal(hover(unknown, { line: 0, character: 0 }), undefined);
@@ -1320,6 +1331,47 @@ test("describes complete bracket-expression structures in both modes", async () 
   }
 });
 
+test("keeps complete bracket members outside an incomplete frame", async () => {
+  const source = "/[^a-z[:alpha:]/p\n";
+  for (const mode of ["bre", "ere"]) {
+    await withAnalysisStore(mode, (store) => {
+      const snapshot = store.open(source);
+      assertAnalysisHover(
+        snapshot,
+        2,
+        { start: 2, end: 3 },
+        {
+          title: "Non-Matching List",
+          synopsis: "[^list]",
+          description:
+            "Makes the bracket expression match a character not represented by its list.",
+        },
+      );
+      assertAnalysisHover(
+        snapshot,
+        4,
+        { start: 4, end: 5 },
+        {
+          title: "Range Expression",
+          synopsis: "[start-end]",
+          description:
+            "In the POSIX locale, represents the collating elements from start through end, inclusive; its behavior in other locales is unspecified.",
+        },
+      );
+      assertAnalysisHover(
+        snapshot,
+        8,
+        { start: 6, end: 15 },
+        {
+          title: "Alphabetic Character Class",
+          synopsis: "[[:alpha:]]",
+          description: "Represents letters in the current locale.",
+        },
+      );
+    });
+  }
+});
+
 test("omits operators whose immediate regular expression structure is invalid", async () => {
   await withAnalysisStore("ere", (store) => {
     for (const [source, offsets] of [
@@ -1400,8 +1452,6 @@ test("omits ordinary, implementation-defined, and recovered BRE syntax", async (
       "/a\\{2/p\n",
       "/\\(a/p\n",
       "/[abc/p\n",
-      "/[a-c/p\n",
-      "/[[:alpha:]/p\n",
     ]) {
       const snapshot = store.open(source);
       for (let offset = 1; offset < source.indexOf("/p"); offset += 1) {
@@ -1511,11 +1561,10 @@ test("omits recovered ERE syntax and returns source offsets", async () => {
 
     const adjacent = store.open("/a**/p\n");
     assert.notEqual(analyzeHover(adjacent, 2), undefined);
-    assert.equal(analyzeHover(adjacent, 3), undefined);
+    assert.notEqual(analyzeHover(adjacent, 3), undefined);
 
     for (const [source, modifierOffset] of [
       ["/*?/p\n", 2],
-      ["/a**?/p\n", 4],
       ["/a{2?/p\n", 4],
     ]) {
       assert.equal(
@@ -1525,9 +1574,11 @@ test("omits recovered ERE syntax and returns source offsets", async () => {
       );
     }
 
+    assert.notEqual(analyzeHover(store.open("/a**?/p\n"), 4), undefined);
+
     const extraModifier = store.open("/a*??/p\n");
     assert.notEqual(analyzeHover(extraModifier, 3), undefined);
-    assert.equal(analyzeHover(extraModifier, 4), undefined);
+    assert.notEqual(analyzeHover(extraModifier, 4), undefined);
 
     const quotedBackreference = store.open("/\\1/p\n");
     assert.equal(analyzeHover(quotedBackreference, 1), undefined);

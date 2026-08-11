@@ -1,69 +1,19 @@
 import {
+  addressReference,
   commandReferenceForVerb,
+  regularExpressionReference,
+  replacementReference,
   substitutionFlagReferenceForType,
 } from "./catalog.js";
 import {
   delimiterTokenFor,
+  invalidStructure,
   isCompleteContextAddress,
+  mayContainInvalidStructure,
   rangeForNode as offsetRangeForNode,
   textForNode,
 } from "./cst.js";
 import { assertSnapshot } from "./snapshot.js";
-
-const addressReferenceByType = Object.freeze({
-  line_number_address: {
-    title: "Line Number Address",
-    synopsis: "number",
-    description:
-      "Selects the input line with this cumulative line number across all input files.",
-  },
-  last_line_address: {
-    title: "Last-Line Address",
-    synopsis: "$",
-    description: "Selects the last line of input.",
-  },
-});
-
-const addressRangeReference = Object.freeze({
-  title: "Address Range",
-  synopsis: "address1,address2",
-  description:
-    "Selects each inclusive range from a pattern space selected by address1 through the next pattern space selected by address2; if address2 is a line number no greater than the first selected line number, only that first pattern space is selected.",
-});
-
-const negatedSelectionReference = Object.freeze({
-  title: "Negated Selection",
-  synopsis: "[address[,address]]!function",
-  description:
-    "Inverts the address selection that controls whether the editing command is applied.",
-});
-
-const replacementReferenceByType = Object.freeze({
-  matched_text_reference: {
-    title: "Matched Text",
-    synopsis: "s/RE/&/",
-    description: "Inserts the text matched by RE.",
-  },
-  escaped_newline: {
-    title: "Embedded Newline",
-    synopsis: "s/RE/first\\\nsecond/",
-    description: "Inserts a newline into the replacement.",
-  },
-});
-
-const replacementEscapeReferenceBySpelling = Object.freeze({
-  "\\&": {
-    title: "Literal Ampersand",
-    synopsis: "s/RE/\\&/",
-    description:
-      "Inserts a literal ampersand instead of the text matched by RE.",
-  },
-  "\\\\": {
-    title: "Literal Backslash",
-    synopsis: "s/RE/\\\\/",
-    description: "Inserts a literal backslash.",
-  },
-});
 
 const replacementParentByTokenType = Object.freeze({
   matched_text_reference_token: "matched_text_reference",
@@ -155,18 +105,15 @@ function contextAddressTarget(source, selected) {
   return {
     node,
     display,
-    reference: {
-      title: empty ? "Empty Regular Expression" : "Context Address",
-      synopsis: display,
-      description: empty
-        ? "Behaves as if the most recently applied regular expression from a context address or substitute command were specified."
-        : "Selects each pattern space that matches RE; use /RE/ or \\cREc, where c is any character other than backslash or newline.",
-    },
+    reference: addressReference(
+      empty ? "emptyRegularExpression" : "contextAddress",
+      display,
+    ),
   };
 }
 
 function addressTargetForNode(source, selected) {
-  const directReference = addressReferenceByType[selected.type];
+  const directReference = addressReference(selected.type);
   if (directReference !== undefined && !isExcessAddressElement(selected)) {
     return {
       node: selected,
@@ -187,7 +134,7 @@ function addressTargetForNode(source, selected) {
       return {
         node: selected,
         display: textForNode(source, selected),
-        reference: addressRangeReference,
+        reference: addressReference("range"),
       };
     }
     return undefined;
@@ -204,7 +151,7 @@ function addressTargetForNode(source, selected) {
       return {
         node: selected,
         display: textForNode(source, selected),
-        reference: negatedSelectionReference,
+        reference: addressReference("negatedSelection"),
       };
     }
     return undefined;
@@ -251,33 +198,15 @@ function visibleText(value) {
 }
 
 function replacementReferenceFor(node, spelling) {
-  const reference = replacementReferenceByType[node.type];
-  if (reference !== undefined) {
-    return reference;
-  }
-  if (node.type === "replacement_escape") {
-    return replacementEscapeReferenceBySpelling[spelling];
-  }
   if (node.type === "replacement_backreference") {
     const number = spelling.at(-1);
-    if (number === "0") {
-      return undefined;
-    }
-    return {
-      title: "Back-Reference",
-      synopsis: `s/RE/\\${number}/`,
-      description: `Inserts the text matched by regular-expression subexpression ${number}, or an empty string if that subexpression did not match.`,
-    };
+    return number === "0" ? undefined : replacementReference(node.type, number);
   }
   if (node.type === "replacement_escaped_delimiter") {
     const delimiter = visibleDelimiter(spelling.slice(1));
-    return {
-      title: "Literal Delimiter",
-      synopsis: `s${delimiter}RE${delimiter}\\${delimiter}${delimiter}`,
-      description: "Inserts the substitution delimiter as a literal character.",
-    };
+    return replacementReference(node.type, delimiter);
   }
-  return undefined;
+  return replacementReference(node.type, spelling);
 }
 
 function replacementTargetForNode(source, selected) {
@@ -302,45 +231,6 @@ function replacementTargetForNode(source, selected) {
   };
 }
 
-const regularExpressionReferenceByOperatorType = Object.freeze({
-  left_anchor: {
-    title: "Beginning Anchor",
-    synopsis: "^RE",
-    description: "Matches only at the beginning of the string being searched.",
-  },
-  right_anchor: {
-    title: "End Anchor",
-    synopsis: "RE$",
-    description: "Matches only at the end of the string being searched.",
-  },
-  wildcard: {
-    title: "Any-Character Expression",
-    synopsis: ".",
-    description:
-      "Matches any character in the supported character set except NUL.",
-  },
-  zero_or_more_operator: {
-    title: "Zero-or-More Duplication",
-    synopsis: "RE*",
-    description: "Matches zero or more consecutive occurrences of RE.",
-  },
-  one_or_more_operator: {
-    title: "One-or-More Duplication",
-    synopsis: "RE+",
-    description: "Matches one or more consecutive occurrences of RE.",
-  },
-  zero_or_one_operator: {
-    title: "Zero-or-One Duplication",
-    synopsis: "RE?",
-    description: "Matches zero or one occurrence of RE.",
-  },
-  ere_alternation_operator: {
-    title: "Alternation",
-    synopsis: "RE|RE",
-    description: "Matches either the expression on the left or the right.",
-  },
-});
-
 const regularExpressionOperatorWrapperByTokenType = Object.freeze({
   left_anchor_token: "left_anchor",
   right_anchor_token: "right_anchor",
@@ -348,137 +238,14 @@ const regularExpressionOperatorWrapperByTokenType = Object.freeze({
   ere_alternation_operator_token: "ere_alternation_operator",
 });
 
-const minimalRepetitionReference = Object.freeze({
-  title: "Minimal Repetition Modifier",
-  description:
-    "Makes the preceding duplication prefer the shortest match that permits the complete ERE to match.",
-});
-
-const bracketExpressionReference = Object.freeze({
-  title: "Bracket Expression",
-  synopsis: "[list]",
-  description:
-    "Matches a character, and may match a multi-character collating element, represented by its non-empty list.",
-});
-
-const nonmatchingListReference = Object.freeze({
-  title: "Non-Matching List",
-  synopsis: "[^list]",
-  description:
-    "Makes the bracket expression match a character not represented by its list.",
-});
-
-const rangeReference = Object.freeze({
-  title: "Range Expression",
-  synopsis: "[start-end]",
-  description:
-    "In the POSIX locale, represents the collating elements from start through end, inclusive; its behavior in other locales is unspecified.",
-});
-
-const characterClassReference = Object.freeze({
-  title: "Character Class Expression",
-  synopsis: "[[:class:]]",
-  description:
-    "Represents the set of characters belonging to this locale-defined character class.",
-});
-
-function namedCharacterClassReference(name, title, description) {
-  return Object.freeze({
-    title: `${title} Character Class`,
-    synopsis: `[[:${name}:]]`,
-    description,
-  });
-}
-
-const characterClassReferences = Object.freeze({
-  alnum: namedCharacterClassReference(
-    "alnum",
-    "Alphanumeric",
-    "Represents letters and decimal digits in the current locale.",
-  ),
-  alpha: namedCharacterClassReference(
-    "alpha",
-    "Alphabetic",
-    "Represents letters in the current locale.",
-  ),
-  blank: namedCharacterClassReference(
-    "blank",
-    "Blank",
-    "Represents blank characters in the current locale; in the POSIX locale, these are space and tab.",
-  ),
-  cntrl: namedCharacterClassReference(
-    "cntrl",
-    "Control",
-    "Represents control characters in the current locale.",
-  ),
-  digit: namedCharacterClassReference(
-    "digit",
-    "Decimal Digit",
-    "Represents exactly the decimal digits 0 through 9 in every locale.",
-  ),
-  graph: namedCharacterClassReference(
-    "graph",
-    "Graphical",
-    "Represents printable characters other than space in the current locale.",
-  ),
-  lower: namedCharacterClassReference(
-    "lower",
-    "Lowercase",
-    "Represents lowercase letters in the current locale.",
-  ),
-  print: namedCharacterClassReference(
-    "print",
-    "Printable",
-    "Represents printable characters, including space, in the current locale.",
-  ),
-  punct: namedCharacterClassReference(
-    "punct",
-    "Punctuation",
-    "Represents punctuation characters in the current locale.",
-  ),
-  space: namedCharacterClassReference(
-    "space",
-    "White-Space",
-    "Represents white-space characters; in the POSIX locale, these are space, tab, newline, carriage return, form feed, and vertical tab.",
-  ),
-  upper: namedCharacterClassReference(
-    "upper",
-    "Uppercase",
-    "Represents uppercase letters in the current locale.",
-  ),
-  xdigit: namedCharacterClassReference(
-    "xdigit",
-    "Hexadecimal Digit",
-    "Represents exactly 0 through 9, A through F, and a through f in every locale.",
-  ),
-});
-
-const collatingSymbolReference = Object.freeze({
-  title: "Collating Symbol",
-  synopsis: "[[.element.]]",
-  description:
-    "Represents this collating element as a single bracket-expression element.",
-});
-
-const equivalenceClassReference = Object.freeze({
-  title: "Equivalence Class Expression",
-  synopsis: "[[=element=]]",
-  description:
-    "Represents the set of collating elements in the same equivalence class as this element.",
-});
-
-const bracketTermReferences = Object.freeze({
-  character_class: characterClassReference,
-  collating_symbol: collatingSymbolReference,
-  equivalence_class: equivalenceClassReference,
-});
-
 function sameNode(left, right) {
   return left != null && right != null && left.equals(right);
 }
 
 function completeNode(node) {
-  return node != null && !node.isMissing && node.endIndex > node.startIndex;
+  return (
+    node != null && !invalidStructure(node) && node.endIndex > node.startIndex
+  );
 }
 
 function hasIssue(node) {
@@ -503,12 +270,10 @@ function regularExpressionRepetitionModifierTarget(source, selected) {
     !completeNode(selected) ||
     !sameNode(selected, modifier.childForFieldName("operator")) ||
     symbol?.type !== "ere_dupl_symbol" ||
-    hasIssue(symbol) ||
     expression?.type !== "ere_expression" ||
     !sameNode(symbol, expression.childForFieldName("operator")) ||
     operand?.type !== "ere_expression" ||
     baseSymbol?.type !== "ere_dupl_symbol" ||
-    hasIssue(baseSymbol) ||
     baseSymbol.namedChild(0)?.type === "repetition_modifier"
   ) {
     return undefined;
@@ -516,10 +281,10 @@ function regularExpressionRepetitionModifierTarget(source, selected) {
   return {
     node: selected,
     display: textForNode(source, selected),
-    reference: Object.freeze({
-      ...minimalRepetitionReference,
-      synopsis: `RE${textForNode(source, baseSymbol)}?`,
-    }),
+    reference: regularExpressionReference(
+      "repetition_modifier",
+      `RE${textForNode(source, baseSymbol)}?`,
+    ),
   };
 }
 
@@ -544,8 +309,8 @@ function regularExpressionOperatorTarget(source, selected) {
     regularExpressionOperatorWrapperByTokenType[selected.type];
   const node =
     wrapperType === undefined ? selected : directWrapper(selected, wrapperType);
-  const reference = node && regularExpressionReferenceByOperatorType[node.type];
-  if (reference === undefined || !completeNode(node) || hasIssue(node)) {
+  const reference = node && regularExpressionReference(node.type);
+  if (reference === undefined || !completeNode(node)) {
     return undefined;
   }
 
@@ -574,7 +339,6 @@ function regularExpressionOperatorTarget(source, selected) {
     if (
       (symbol?.type !== "bre_dupl_symbol" &&
         symbol?.type !== "ere_dupl_symbol") ||
-      hasIssue(symbol) ||
       symbol.parent?.type !== expressionType
     ) {
       return undefined;
@@ -613,7 +377,7 @@ function regularExpressionGroupTarget(source, selected) {
   }
   const group = delimiter.parent;
   const expectedGroup = bre ? "nondupl_bre" : "ere_expression";
-  if (group?.type !== expectedGroup || hasIssue(group)) {
+  if (group?.type !== expectedGroup) {
     return undefined;
   }
   const opening = group.childForFieldName("opening");
@@ -623,7 +387,6 @@ function regularExpressionGroupTarget(source, selected) {
     !completeNode(opening) ||
     !completeNode(expression) ||
     !completeNode(closing) ||
-    hasIssue(closing) ||
     (!sameNode(delimiter, opening) && !sameNode(delimiter, closing))
   ) {
     return undefined;
@@ -631,12 +394,7 @@ function regularExpressionGroupTarget(source, selected) {
   return {
     node: delimiter,
     display: textForNode(source, delimiter),
-    reference: {
-      title: "Subexpression",
-      synopsis: bre ? "\\(RE\\)" : "(RE)",
-      description:
-        "Groups RE as one expression; duplication applies to the group as a whole.",
-    },
+    reference: regularExpressionReference("group", bre ? "bre" : "ere"),
   };
 }
 
@@ -664,7 +422,6 @@ function regularExpressionIntervalTarget(source, selected) {
     node?.type === "bre_dupl_symbol" ? "simple_bre" : "ere_expression";
   if (
     node === undefined ||
-    hasIssue(node) ||
     !completeNode(node.childForFieldName("opening")) ||
     !completeNode(node.childForFieldName("minimum")) ||
     !completeNode(node.childForFieldName("closing")) ||
@@ -672,16 +429,13 @@ function regularExpressionIntervalTarget(source, selected) {
   ) {
     return undefined;
   }
-  const bre = node.type === "bre_dupl_symbol";
   return {
     node,
     display: textForNode(source, node),
-    reference: {
-      title: "Interval Duplication",
-      synopsis: bre ? "RE\\{m,n\\}" : "RE{m,n}",
-      description:
-        "Matches a number of consecutive occurrences of RE within the interval's minimum and optional maximum bounds.",
-    },
+    reference: regularExpressionReference(
+      "interval",
+      node.type === "bre_dupl_symbol" ? "bre" : "ere",
+    ),
   };
 }
 
@@ -700,39 +454,22 @@ function regularExpressionBackreferenceTarget(source, selected) {
   return {
     node,
     display: spelling,
-    reference: {
-      title: "Back-Reference",
-      synopsis: `\\${number}`,
-      description: `Matches the same string matched by preceding BRE subexpression ${number}.`,
-    },
+    reference: regularExpressionReference("backreference", number),
   };
 }
 
-function completeBracket(node) {
+function completeBracketFrame(node) {
   const opening = node?.childForFieldName("opening");
   const list = node?.childForFieldName("list");
   const closing = node?.childForFieldName("closing");
   return (
     node?.type === "bracket_expression" &&
-    !hasIssue(node) &&
     completeNode(opening) &&
     !hasIssue(opening) &&
     completeNode(list) &&
-    !hasIssue(list) &&
     completeNode(closing) &&
     !hasIssue(closing)
   );
-}
-
-function ancestorOfType(node, type) {
-  let current = node;
-  while (current !== null) {
-    if (current.type === type) {
-      return current;
-    }
-    current = current.parent;
-  }
-  return undefined;
 }
 
 function regularExpressionBracketFrameTarget(source, selected) {
@@ -747,11 +484,11 @@ function regularExpressionBracketFrameTarget(source, selected) {
     return undefined;
   }
   const bracket = delimiter.parent;
-  return completeBracket(bracket)
+  return completeBracketFrame(bracket)
     ? {
         node: delimiter,
         display: textForNode(source, delimiter),
-        reference: bracketExpressionReference,
+        reference: regularExpressionReference("bracket_expression"),
       }
     : undefined;
 }
@@ -759,16 +496,14 @@ function regularExpressionBracketFrameTarget(source, selected) {
 function regularExpressionBracketOperatorTarget(source, selected) {
   if (selected.type === "nonmatching_list_operator") {
     const list = selected.parent;
-    const bracket = list?.parent;
     if (
       list?.type === "nonmatching_list" &&
-      sameNode(selected, list.childForFieldName("operator")) &&
-      completeBracket(bracket)
+      sameNode(selected, list.childForFieldName("operator"))
     ) {
       return {
         node: selected,
         display: textForNode(source, selected),
-        reference: nonmatchingListReference,
+        reference: regularExpressionReference("nonmatching_list"),
       };
     }
   }
@@ -783,13 +518,12 @@ function regularExpressionBracketOperatorTarget(source, selected) {
     sameNode(selected, selected.parent.childForFieldName("operator")) &&
     !hasIssue(selected.parent) &&
     completeNode(end) &&
-    !hasIssue(end) &&
-    completeBracket(ancestorOfType(selected, "bracket_expression"))
+    !hasIssue(end)
   ) {
     return {
       node: selected,
       display: textForNode(source, selected),
-      reference: rangeReference,
+      reference: regularExpressionReference("range_expression"),
     };
   }
   return undefined;
@@ -798,7 +532,7 @@ function regularExpressionBracketOperatorTarget(source, selected) {
 function regularExpressionBracketTermTarget(source, selected) {
   let node = selected;
   while (node !== null) {
-    let reference = bracketTermReferences[node.type];
+    let reference = regularExpressionReference(node.type);
     if (reference !== undefined) {
       const opening = node.childForFieldName("opening");
       const middle =
@@ -808,14 +542,11 @@ function regularExpressionBracketTermTarget(source, selected) {
         !hasIssue(node) &&
         completeNode(opening) &&
         completeNode(middle) &&
-        completeNode(closing) &&
-        completeBracket(ancestorOfType(node, "bracket_expression"))
+        completeNode(closing)
       ) {
         if (node.type === "character_class") {
           const name = textForNode(source, middle);
-          if (Object.hasOwn(characterClassReferences, name)) {
-            reference = characterClassReferences[name];
-          }
+          reference = regularExpressionReference("character_class", name);
         }
         return {
           node,
@@ -834,7 +565,13 @@ function regularExpressionBracketTermTarget(source, selected) {
 }
 
 const regularExpressionOperatorTypes = new Set([
-  ...Object.keys(regularExpressionReferenceByOperatorType),
+  "ere_alternation_operator",
+  "left_anchor",
+  "one_or_more_operator",
+  "right_anchor",
+  "wildcard",
+  "zero_or_more_operator",
+  "zero_or_one_operator",
   ...Object.keys(regularExpressionOperatorWrapperByTokenType),
 ]);
 const regularExpressionGroupTypes = new Set([
@@ -868,7 +605,9 @@ const regularExpressionBracketOperatorTypes = new Set([
   "range_operator",
 ]);
 const regularExpressionBracketTermTypes = new Set([
-  ...Object.keys(bracketTermReferences),
+  "character_class",
+  "collating_symbol",
+  "equivalence_class",
   "class_name",
   "coll_elem_multi",
   "coll_elem_single",
@@ -919,6 +658,28 @@ function targetForNode(source, selected) {
   );
 }
 
+function selectedNode(root, offset) {
+  if (offset >= root.endIndex) {
+    return undefined;
+  }
+  const selected = root.namedDescendantForIndex(offset, offset + 1);
+  if (
+    selected === null ||
+    offset < selected.startIndex ||
+    offset >= selected.endIndex
+  ) {
+    return undefined;
+  }
+  if (mayContainInvalidStructure(root)) {
+    for (let node = selected; node !== null; node = node.parent) {
+      if (invalidStructure(node)) {
+        return undefined;
+      }
+    }
+  }
+  return selected;
+}
+
 export function hover(snapshot, offset) {
   assertSnapshot(snapshot);
   if (!Number.isInteger(offset)) {
@@ -929,11 +690,8 @@ export function hover(snapshot, offset) {
   }
   const { source, tree } = snapshot;
   const root = tree.rootNode;
-  if (offset >= root.endIndex) {
-    return undefined;
-  }
-  const node = root.namedDescendantForIndex(offset, offset + 1);
-  if (node === null || offset < node.startIndex || offset >= node.endIndex) {
+  const node = selectedNode(root, offset);
+  if (node === undefined) {
     return undefined;
   }
 

@@ -11,7 +11,7 @@ import {
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const treeSitterPosixSedRevision = "5a1270d54337c909a8fca6b0dda396d579da79b1";
+const treeSitterPosixSedRevision = "77dbaf6ccc12c360b75d9f3077ccb474d0cdaaf9";
 const syntaxIssueOutcomeNames = new Set([
   "implementation_defined_syntax",
   "implementation_option_syntax",

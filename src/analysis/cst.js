@@ -9,6 +9,9 @@ function requiredNamedChild(node) {
   return child;
 }
 
+export const recoveryNodeTypes = Object.freeze([]);
+const recoveryTypes = new Set(recoveryNodeTypes);
+
 export function descendants(root, type) {
   const matches = [];
   const stack = [root];
@@ -38,6 +41,16 @@ export function rangeForNode(node) {
     startOffset: node.startIndex,
     endOffset: node.endIndex,
   };
+}
+
+export function invalidStructure(node) {
+  return (
+    node.isMissing || node.type === "ERROR" || recoveryTypes.has(node.type)
+  );
+}
+
+export function mayContainInvalidStructure(root) {
+  return root.hasError || recoveryTypes.size > 0;
 }
 
 export function delimiterTokenFor(node, field) {

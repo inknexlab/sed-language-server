@@ -11,7 +11,7 @@ test("loads the pinned BRE and ERE grammars independently", async () => {
   assert.equal(Object.isFrozen(grammarManifest()), true);
   assert.equal(
     grammarManifest().revision,
-    "5a1270d54337c909a8fca6b0dda396d579da79b1",
+    "77dbaf6ccc12c360b75d9f3077ccb474d0cdaaf9",
   );
   assert.equal(Object.isFrozen(grammarManifest().languages), true);
 

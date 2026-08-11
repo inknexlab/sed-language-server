@@ -14,6 +14,18 @@ A language server for POSIX.1-2024 `sed`.
 npm install --global @inknexlab/sed-language-server
 ```
 
+## Usage
+
+Start the server over standard input and output:
+
+```sh
+sed-language-server --stdio
+```
+
+The client selects the regular-expression language with the `regex` initialization
+option: `bre` or `ere`. The default is `bre`, and the selection remains fixed for
+the lifetime of the server process.
+
 ## Features
 
 - Diagnostics

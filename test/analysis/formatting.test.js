@@ -30,6 +30,61 @@ test("uses tabs when the client requests tab indentation", async () => {
   assert.equal(text, "{\n\t{\n\t\tp\n\t}\n}\n");
 });
 
+test("defaults formatting options and ignores unknown fields", async () => {
+  await withAnalysisSnapshot("bre", "{p;}", (snapshot) => {
+    assert.equal(analyzeFormat(snapshot), "{\n  p\n}\n");
+    assert.equal(
+      analyzeFormat(snapshot, { futureOption: true }),
+      "{\n  p\n}\n",
+    );
+  });
+});
+
+test("validates formatting options before inspecting the source", async () => {
+  for (const source of ["", "p\n", "r\n"]) {
+    await withAnalysisSnapshot("bre", source, (snapshot) => {
+      assert.throws(
+        () => analyzeFormat(snapshot, { insertSpaces: false, tabSize: 0 }),
+        /tabSize must be a positive safe integer/,
+      );
+    });
+  }
+});
+
+test("validates formatting option types without coercion", async () => {
+  await withAnalysisSnapshot("bre", "p\n", (snapshot) => {
+    for (const options of [null, [], true]) {
+      assert.throws(
+        () => analyzeFormat(snapshot, options),
+        /must be an object/,
+      );
+    }
+    assert.throws(
+      () => analyzeFormat(snapshot, { insertSpaces: "yes" }),
+      /insertSpaces must be a boolean/,
+    );
+    for (const tabSize of ["2", 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(
+        () => analyzeFormat(snapshot, { tabSize }),
+        /tabSize must be a positive safe integer/,
+      );
+    }
+  });
+});
+
+test("does not allocate impractical indentation", async () => {
+  const options = {
+    insertSpaces: true,
+    tabSize: Number.MAX_SAFE_INTEGER,
+  };
+  await withAnalysisSnapshot("bre", "p;p", (snapshot) => {
+    assert.equal(analyzeFormat(snapshot, options), "p\np\n");
+  });
+  await withAnalysisSnapshot("bre", "{p;}\n", (snapshot) => {
+    assert.equal(analyzeFormat(snapshot, options), undefined);
+  });
+});
+
 test("preserves leading, interior, and trailing blank lines", async () => {
   const { text } = await format("\n\n p\n\n{\n\nq\n\n}\n\n");
   assert.equal(text, "\n\np\n\n{\n\n  q\n\n}\n\n");

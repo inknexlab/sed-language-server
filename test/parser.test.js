@@ -267,6 +267,17 @@ test("recovery CSTs converge from distinct edit histories", async () => {
   }
 });
 
+test("native recovery CSTs do not depend on edit history", async () => {
+  await assertIncrementalMatchesFull({
+    mode: "bre",
+    source: "}}{};}{}",
+    changes: (document) => [changeForOffsets(document, 0, 0, "x")],
+    verify: ({ tree }) => {
+      assert.equal(tree.rootNode.hasError, true);
+    },
+  });
+});
+
 test("script-leading #n suppression follows incremental edits", async () => {
   for (const mode of ["bre", "ere"]) {
     const incrementalStore = await SyntaxStore.create(mode);

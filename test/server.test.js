@@ -98,11 +98,6 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
     server.connection,
     {},
     {
-      completion: {
-        completionItem: {
-          documentationFormat: ["markdown", "plaintext"],
-        },
-      },
       hover: { contentFormat: ["markdown", "plaintext"] },
     },
   );
@@ -112,20 +107,11 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
       openClose: true,
       change: 2,
     },
-    completionProvider: {},
     definitionProvider: true,
     referencesProvider: true,
     hoverProvider: true,
     documentFormattingProvider: true,
   });
-
-  assert.deepEqual(
-    await server.connection.sendRequest("textDocument/completion", {
-      textDocument: { uri: "file:///unopened.sed" },
-      position: { line: 0, character: 0 },
-    }),
-    [],
-  );
 
   assert.deepEqual(
     await server.connection.sendRequest("textDocument/definition", {
@@ -233,26 +219,6 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
         end: { line: 3, character: 1 },
       },
     },
-  );
-
-  assert.deepEqual(
-    await server.connection.sendRequest("textDocument/completion", {
-      textDocument: { uri },
-      position: { line: 2, character: 4 },
-    }),
-    [
-      {
-        label: "target",
-        kind: 18,
-        textEdit: {
-          range: {
-            start: { line: 2, character: 2 },
-            end: { line: 2, character: 8 },
-          },
-          newText: "target",
-        },
-      },
-    ],
   );
 
   assert.deepEqual(
@@ -409,18 +375,13 @@ test("debounces changed diagnostics and cancels closed documents", async (t) => 
   assert.equal(server.stderr(), "");
 });
 
-test("uses the client's preferred markup for hover and completion", async (t) => {
+test("uses the client's preferred markup for hover", async (t) => {
   const server = startServer();
   t.after(async () => stopServer(server));
   await initialize(
     server.connection,
     {},
     {
-      completion: {
-        completionItem: {
-          documentationFormat: ["plaintext", "markdown"],
-        },
-      },
       hover: { contentFormat: ["plaintext", "markdown"] },
     },
   );
@@ -459,33 +420,6 @@ test("uses the client's preferred markup for hover and completion", async (t) =>
     },
   );
 
-  const completions = await server.connection.sendRequest(
-    "textDocument/completion",
-    {
-      textDocument: { uri },
-      position: { line: 0, character: 2 },
-    },
-  );
-  assert.deepEqual(
-    completions.find(({ label }) => label === "D"),
-    {
-      label: "D",
-      kind: 14,
-      detail: "Delete First Line",
-      documentation: {
-        kind: "plaintext",
-        value:
-          "[address[,address]]D\n\nDeletes through the first newline and restarts the cycle without reading input, or acts like d when no newline exists.",
-      },
-      textEdit: {
-        range: {
-          start: { line: 0, character: 2 },
-          end: { line: 0, character: 2 },
-        },
-        newText: "D",
-      },
-    },
-  );
   assert.equal(server.stderr(), "");
 });
 
@@ -495,14 +429,12 @@ test("uses legacy strings when markup formats are not advertised", async (t) => 
     {
       name: "empty",
       capabilities: {
-        completion: { completionItem: { documentationFormat: [] } },
         hover: { contentFormat: [] },
       },
     },
     {
       name: "unsupported-only",
       capabilities: {
-        completion: { completionItem: { documentationFormat: ["html"] } },
         hover: { contentFormat: ["html"] },
       },
     },
@@ -545,30 +477,6 @@ test("uses legacy strings when markup formats are not advertised", async (t) => 
         },
       );
 
-      const completions = await server.connection.sendRequest(
-        "textDocument/completion",
-        {
-          textDocument: { uri },
-          position: { line: 0, character: 2 },
-        },
-      );
-      assert.deepEqual(
-        completions.find(({ label }) => label === "D"),
-        {
-          label: "D",
-          kind: 14,
-          detail: "Delete First Line",
-          documentation:
-            "[address[,address]]D\n\nDeletes through the first newline and restarts the cycle without reading input, or acts like d when no newline exists.",
-          textEdit: {
-            range: {
-              start: { line: 0, character: 2 },
-              end: { line: 0, character: 2 },
-            },
-            newText: "D",
-          },
-        },
-      );
       assert.equal(server.stderr(), "");
     });
   }

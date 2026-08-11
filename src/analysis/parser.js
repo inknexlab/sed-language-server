@@ -107,6 +107,49 @@ function advancePoint(start, text) {
   return { row, column: text.length - lastLineStart };
 }
 
+function applySourceEdit(source, edit, tree) {
+  const { oldEndIndex, startIndex, text } = edit ?? {};
+  if (
+    !Number.isInteger(startIndex) ||
+    !Number.isInteger(oldEndIndex) ||
+    startIndex < 0 ||
+    oldEndIndex < startIndex ||
+    oldEndIndex > source.length ||
+    typeof text !== "string"
+  ) {
+    throw new TypeError("Invalid incremental source edit.");
+  }
+
+  if (tree !== undefined) {
+    const startPosition = pointAtOffset(source, startIndex);
+    tree.edit({
+      startIndex,
+      oldEndIndex,
+      newEndIndex: startIndex + text.length,
+      startPosition,
+      oldEndPosition: pointAtOffset(source, oldEndIndex),
+      newEndPosition: advancePoint(startPosition, text),
+    });
+  }
+
+  return `${source.slice(0, startIndex)}${text}${source.slice(oldEndIndex)}`;
+}
+
+function applySourceEdits(source, edits, tree) {
+  let editedSource = source;
+  for (const edit of edits) {
+    editedSource = applySourceEdit(editedSource, edit, tree);
+  }
+  return editedSource;
+}
+
+function hasRecovery(tree) {
+  return (
+    tree.rootNode.hasError ||
+    tree.rootNode.descendantsOfType("syntax_issue").length > 0
+  );
+}
+
 export class SedParser {
   static async create(mode) {
     const language = await loadLanguage(mode);
@@ -140,10 +183,19 @@ export class SedParser {
     }
   }
 
-  #parse(source, oldTree) {
+  #parseTree(source, oldTree) {
     const tree = this.#parser.parse(source, oldTree);
     if (tree === null) {
       throw new Error(`Failed to parse POSIX sed ${this.#mode.toUpperCase()}.`);
+    }
+    return tree;
+  }
+
+  #parse(source, oldTree) {
+    let tree = this.#parseTree(source, oldTree);
+    if (oldTree !== undefined && hasRecovery(tree)) {
+      tree.delete();
+      tree = this.#parseTree(source);
     }
     parsedTrees.set(tree, { mode: this.#mode, source });
     return tree;
@@ -175,32 +227,19 @@ export class SedParser {
       throw new TypeError("Incremental edits must be an array.");
     }
 
-    let editedSource = parsed.source;
+    if (hasRecovery(oldTree)) {
+      const editedSource = applySourceEdits(parsed.source, edits);
+      if (editedSource !== source) {
+        throw new TypeError(
+          "The incremental edits must produce the requested sed source.",
+        );
+      }
+      return this.#parse(source);
+    }
+
     const editedTree = oldTree.copy();
     try {
-      for (const edit of edits) {
-        const { oldEndIndex, startIndex, text } = edit ?? {};
-        if (
-          !Number.isInteger(startIndex) ||
-          !Number.isInteger(oldEndIndex) ||
-          startIndex < 0 ||
-          oldEndIndex < startIndex ||
-          oldEndIndex > editedSource.length ||
-          typeof text !== "string"
-        ) {
-          throw new TypeError("Invalid incremental source edit.");
-        }
-        const startPosition = pointAtOffset(editedSource, startIndex);
-        editedTree.edit({
-          startIndex,
-          oldEndIndex,
-          newEndIndex: startIndex + text.length,
-          startPosition,
-          oldEndPosition: pointAtOffset(editedSource, oldEndIndex),
-          newEndPosition: advancePoint(startPosition, text),
-        });
-        editedSource = `${editedSource.slice(0, startIndex)}${text}${editedSource.slice(oldEndIndex)}`;
-      }
+      const editedSource = applySourceEdits(parsed.source, edits, editedTree);
       if (editedSource !== source) {
         throw new TypeError(
           "The incremental edits must produce the requested sed source.",

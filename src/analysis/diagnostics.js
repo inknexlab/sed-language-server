@@ -12,14 +12,7 @@ import { assertSnapshot } from "./snapshot.js";
 const portableDuplicationLimit = 255n;
 const portableRegularExpressionLength = 256;
 const cycleRestart = -1;
-const noRegularExpression = 10;
-const lineKinds = Object.freeze({
-  first: 0,
-  last: 1,
-  middle: 2,
-  only: 3,
-});
-const lineKindCount = Object.keys(lineKinds).length;
+const regexFlowWorkBudget = 100_000;
 
 function minimumEncodedByteLength(value) {
   return Array.from(value).length;
@@ -937,45 +930,277 @@ function createControlFlow(source, root, symbols) {
   return { entry, units };
 }
 
-function setUnion(...sets) {
-  return new Set(sets.flatMap((set) => [...set]));
+const selectionSensitiveFunctions = new Set([
+  "block_function",
+  "branch_function",
+  "change_function",
+  "delete_first_line_function",
+  "delete_function",
+  "next_append_function",
+  "next_function",
+  "quit_function",
+  "substitute_function",
+  "test_function",
+]);
+
+function absoluteBigInt(value) {
+  return value < 0n ? -value : value;
 }
 
-function analysisState(groupCount, hasSubstituted, lineKind) {
-  const group = groupCount === null ? noRegularExpression : groupCount;
-  return (group * 2 + Number(hasSubstituted)) * lineKindCount + lineKind;
+function greatestCommonDivisor(left, right) {
+  let a = absoluteBigInt(left);
+  let b = absoluteBigInt(right);
+  while (b !== 0n) {
+    const remainder = a % b;
+    a = b;
+    b = remainder;
+  }
+  return a;
 }
 
-function groupCountOf(state) {
-  const group = Math.floor(state / (2 * lineKindCount));
-  return group === noRegularExpression ? null : group;
+function firstCongruentAtOrAfter(first, lower, stride) {
+  if (first >= lower) {
+    return first;
+  }
+  const distance = lower - first;
+  return first + ((distance + stride - 1n) / stride) * stride;
 }
 
-function hasSubstituted(state) {
-  return Math.floor(state / lineKindCount) % 2 === 1;
+function lastCongruentAtOrBefore(first, upper, stride) {
+  if (first > upper) {
+    return undefined;
+  }
+  return first + ((upper - first) / stride) * stride;
 }
 
-function lineKindOf(state) {
-  return state % lineKindCount;
+function restrictInterval(interval, lower, upper) {
+  const effectiveLower = interval.minimum > lower ? interval.minimum : lower;
+  const effectiveUpper =
+    interval.maximum === null
+      ? upper
+      : upper === null || interval.maximum < upper
+        ? interval.maximum
+        : upper;
+  if (effectiveUpper !== null && effectiveLower > effectiveUpper) {
+    return undefined;
+  }
+  if (interval.stride === 0n) {
+    return interval.minimum >= effectiveLower &&
+      (effectiveUpper === null || interval.minimum <= effectiveUpper)
+      ? interval
+      : undefined;
+  }
+  const minimum = firstCongruentAtOrAfter(
+    interval.minimum,
+    effectiveLower,
+    interval.stride,
+  );
+  if (effectiveUpper !== null && minimum > effectiveUpper) {
+    return undefined;
+  }
+  const maximum =
+    effectiveUpper === null
+      ? null
+      : lastCongruentAtOrBefore(minimum, effectiveUpper, interval.stride);
+  if (maximum === undefined) {
+    return undefined;
+  }
+  return {
+    minimum,
+    maximum,
+    stride: maximum === minimum ? 0n : interval.stride,
+  };
 }
 
-function withGroupCount(state, groupCount) {
-  return analysisState(groupCount, hasSubstituted(state), lineKindOf(state));
+function sameInterval(left, right) {
+  return (
+    left.minimum === right.minimum &&
+    left.maximum === right.maximum &&
+    left.stride === right.stride
+  );
 }
 
-function withSubstitutionState(state, substituted) {
-  return analysisState(groupCountOf(state), substituted, lineKindOf(state));
+function joinIntervals(left, right, region) {
+  if (sameInterval(left, right)) {
+    return left;
+  }
+  const minimum = left.minimum < right.minimum ? left.minimum : right.minimum;
+  const maximum =
+    left.maximum === null || right.maximum === null
+      ? null
+      : left.maximum > right.maximum
+        ? left.maximum
+        : right.maximum;
+  if (maximum !== null && minimum === maximum) {
+    return { minimum, maximum, stride: 0n };
+  }
+  const stride = greatestCommonDivisor(
+    greatestCommonDivisor(left.stride, right.stride),
+    left.minimum - right.minimum,
+  );
+  // One congruence per numeric region bounds the state space. Widening only
+  // adds line numbers, so the may-analysis cannot lose a concrete execution.
+  const widenedMinimum = firstCongruentAtOrAfter(
+    minimum,
+    region.minimum,
+    stride,
+  );
+  const widenedMaximum =
+    region.maximum === null
+      ? null
+      : lastCongruentAtOrBefore(widenedMinimum, region.maximum, stride);
+  return {
+    minimum: widenedMinimum,
+    maximum: widenedMaximum,
+    stride:
+      widenedMaximum !== null && widenedMaximum === widenedMinimum
+        ? 0n
+        : stride,
+  };
 }
 
-function nextInputStates(state) {
-  const lineKind = lineKindOf(state);
-  if (lineKind === lineKinds.last || lineKind === lineKinds.only) {
+function addressChild(address, type) {
+  return address?.namedChildren.find((child) => child.type === type);
+}
+
+function addressClause(command) {
+  return command.childForFieldName("addresses");
+}
+
+function clauseHasContextAddress(clause) {
+  return clause !== null && descendants(clause, "context_address").length > 0;
+}
+
+function trackedUnit(unit) {
+  const clause = addressClause(unit.command);
+  return (
+    selectionSensitiveFunctions.has(unit.functionNode?.type) ||
+    clauseHasContextAddress(clause)
+  );
+}
+
+function flowMetadata(snapshot, units) {
+  const values = new Map([["1", 1n]]);
+  const rangeByCommand = new Map();
+  let rangeCount = 0;
+  const trackedByCommand = new Map();
+  for (const unit of units) {
+    if (unit.kind !== "command") {
+      continue;
+    }
+    const tracked = trackedUnit(unit);
+    trackedByCommand.set(unit.command.id, tracked);
+    if (!tracked) {
+      continue;
+    }
+    const clause = addressClause(unit.command);
+    if (clause === null) {
+      continue;
+    }
+    for (const address of descendants(clause, "line_number_address")) {
+      const value = countToken(snapshot.source, address);
+      if (value !== undefined && value >= 1n) {
+        values.set(value.toString(), value);
+      }
+    }
+    if (clause.childForFieldName("second") !== null) {
+      rangeByCommand.set(unit.command.id, rangeCount);
+      rangeCount += 1;
+    }
+  }
+  const boundaries = [...values.values()].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  const regions = [];
+  let next = 1n;
+  for (const boundary of boundaries) {
+    if (next < boundary) {
+      regions.push({ minimum: next, maximum: boundary - 1n });
+    }
+    regions.push({ minimum: boundary, maximum: boundary });
+    next = boundary + 1n;
+  }
+  regions.push({ minimum: next, maximum: null });
+  return { rangeByCommand, rangeCount, regions, trackedByCommand };
+}
+
+function regionForLine(regions, line) {
+  let lower = 0;
+  let upper = regions.length;
+  while (lower < upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    const region = regions[middle];
+    if (line < region.minimum) {
+      upper = middle;
+    } else if (region.maximum !== null && line > region.maximum) {
+      lower = middle + 1;
+    } else {
+      return middle;
+    }
+  }
+  throw new Error(`No numeric region contains input line ${line}.`);
+}
+
+function stateKey(state) {
+  return [
+    state.groupCount === null ? "none" : state.groupCount,
+    Number(state.substituted),
+    Number(state.lastLine),
+    state.region,
+  ].join(":");
+}
+
+function withLine(state, line, regions) {
+  return {
+    ...state,
+    region: regionForLine(regions, line.minimum),
+    line,
+  };
+}
+
+function restrictStateLine(state, lower, upper, regions) {
+  const line = restrictInterval(state.line, lower, upper);
+  return line === undefined ? undefined : withLine(state, line, regions);
+}
+
+function advanceInput(state, regions) {
+  if (state.lastLine) {
     return [];
   }
-  return [
-    analysisState(groupCountOf(state), false, lineKinds.middle),
-    analysisState(groupCountOf(state), false, lineKinds.last),
-  ];
+  const shifted = {
+    minimum: state.line.minimum + 1n,
+    maximum: state.line.maximum === null ? null : state.line.maximum + 1n,
+    stride: state.line.stride,
+  };
+  // A completed range can search again only after input advances. Branches
+  // and the non-advancing D path keep closedThisLine unchanged.
+  const nextSearching = state.searching | state.closedThisLine;
+  const result = [];
+  for (let region = state.region; region < regions.length; region += 1) {
+    const bounds = regions[region];
+    const line = restrictInterval(shifted, bounds.minimum, bounds.maximum);
+    if (line !== undefined) {
+      for (const lastLine of [false, true]) {
+        result.push({
+          ...state,
+          substituted: false,
+          lastLine,
+          region,
+          line,
+          searching: nextSearching,
+          active: state.active,
+          closedThisLine: 0n,
+        });
+      }
+    }
+    if (
+      bounds.maximum === null ||
+      (shifted.maximum !== null && shifted.maximum <= bounds.maximum)
+    ) {
+      break;
+    }
+  }
+  return result;
 }
 
 function emptyExpressionRange(container) {
@@ -992,133 +1217,204 @@ function hasTerminatingRegexDelimiter(container) {
   );
 }
 
-function regexTransfer(snapshot, container, input, report) {
+function emptyRegularExpressionDiagnostic(container) {
+  const range = emptyExpressionRange(container);
+  return diagnosticAt(
+    range.startIndex,
+    range.endIndex,
+    "empty-regular-expression-without-previous",
+    "This empty regular expression can be reached before any previous regular expression.",
+  );
+}
+
+function regexTransfer(snapshot, container, state, report) {
   if (!hasTerminatingRegexDelimiter(container)) {
-    return new Set(input);
+    return state;
   }
   const expression = container.childForFieldName("expression");
   if (expression !== null) {
-    const count = groupCount(expression, snapshot.mode);
-    return new Set([...input].map((state) => withGroupCount(state, count)));
+    return { ...state, groupCount: groupCount(expression, snapshot.mode) };
   }
-  if ([...input].some((state) => groupCountOf(state) === null)) {
-    const range = emptyExpressionRange(container);
-    report(
-      diagnosticAt(
-        range.startIndex,
-        range.endIndex,
-        "empty-regular-expression-without-previous",
-        "This empty regular expression can be reached before any previous regular expression.",
-      ),
-    );
+  if (state.groupCount === null) {
+    report(emptyRegularExpressionDiagnostic(container));
   }
-  return new Set(input);
+  return state;
 }
 
-function rangeAddressTransfer(snapshot, clause, input, report) {
-  const initial = new Set(input);
-  const first = clause.childForFieldName("first");
-  const second = clause.childForFieldName("second");
-  const firstContext = first?.namedChildren.find(
-    ({ type }) => type === "context_address",
-  );
-  const afterFirst =
-    firstContext === undefined
-      ? initial
-      : regexTransfer(snapshot, firstContext, initial, report);
-  if (second === null) {
-    return afterFirst;
-  }
-
-  let activeRange =
-    firstContext === undefined
-      ? initial
-      : new Set([...initial].filter((state) => groupCountOf(state) !== null));
-  const secondContext = second?.namedChildren.find(
-    ({ type }) => type === "context_address",
-  );
-  if (secondContext !== undefined) {
-    activeRange = regexTransfer(snapshot, secondContext, activeRange, report);
-  }
-  return setUnion(afterFirst, activeRange);
-}
-
-function addressChild(address, type) {
-  return address?.namedChildren.find((child) => child.type === type);
-}
-
-function partitionAddressStates(input, matches) {
-  const applied = new Set();
-  const skipped = new Set();
-  for (const state of input) {
-    const match = matches(state);
-    if (match !== false) {
-      applied.add(state);
-    }
-    if (match !== true) {
-      skipped.add(state);
-    }
-  }
-  return { applied, skipped };
-}
-
-function singleAddressFlows(snapshot, address, input, report) {
+function evaluateAddress(snapshot, address, state, regions, report) {
   const context = addressChild(address, "context_address");
   if (context !== undefined) {
-    const states = regexTransfer(snapshot, context, input, report);
-    return { applied: states, skipped: new Set(states) };
+    const evaluated = regexTransfer(snapshot, context, state, report);
+    return [
+      { state: evaluated, matches: true },
+      { state: evaluated, matches: false },
+    ];
   }
-
   const lineNumber = addressChild(address, "line_number_address");
   if (lineNumber !== undefined) {
     const number = countToken(snapshot.source, lineNumber);
-    if (number !== undefined) {
-      return partitionAddressStates(input, (state) => {
-        const lineKind = lineKindOf(state);
-        if (number === 1n) {
-          return lineKind === lineKinds.first || lineKind === lineKinds.only;
-        }
-        if (lineKind === lineKinds.first || lineKind === lineKinds.only) {
-          return false;
-        }
-        return undefined;
+    if (number !== undefined && number >= 1n) {
+      const matching = restrictStateLine(state, number, number, regions);
+      if (matching === undefined) {
+        return [{ state, matches: false }];
+      }
+      if (
+        state.line.maximum !== null &&
+        state.line.minimum === state.line.maximum
+      ) {
+        return [{ state: matching, matches: true }];
+      }
+      return [
+        { state: matching, matches: true },
+        { state, matches: false },
+      ];
+    }
+  }
+  if (addressChild(address, "last_line_address") !== undefined) {
+    return [{ state, matches: state.lastLine }];
+  }
+  return [
+    { state, matches: true },
+    { state, matches: false },
+  ];
+}
+
+function setRangePhase(state, bit, phase) {
+  const cleared = ~bit;
+  return {
+    ...state,
+    searching: (state.searching & cleared) | (phase === "searching" ? bit : 0n),
+    active: (state.active & cleared) | (phase === "active" ? bit : 0n),
+    closedThisLine:
+      (state.closedThisLine & cleared) |
+      (phase === "closedThisLine" ? bit : 0n),
+  };
+}
+
+function startedRangeStates(state, second, bit, snapshot, regions) {
+  if (state.lastLine) {
+    return [setRangePhase(state, bit, "closedThisLine")];
+  }
+  const numeric = addressChild(second, "line_number_address");
+  const number =
+    numeric === undefined ? undefined : countToken(snapshot.source, numeric);
+  if (number === undefined) {
+    return [setRangePhase(state, bit, "active")];
+  }
+  const before = restrictStateLine(state, 1n, number - 1n, regions);
+  const atOrAfter = restrictStateLine(state, number, null, regions);
+  return [
+    ...(before === undefined ? [] : [setRangePhase(before, bit, "active")]),
+    ...(atOrAfter === undefined
+      ? []
+      : [setRangePhase(atOrAfter, bit, "closedThisLine")]),
+  ];
+}
+
+function rangeAddressBranches(snapshot, clause, state, range, regions, report) {
+  const first = clause.childForFieldName("first");
+  const second = clause.childForFieldName("second");
+  const bit = 1n << BigInt(range);
+  const result = [];
+  if ((state.searching & bit) !== 0n) {
+    for (const branch of evaluateAddress(
+      snapshot,
+      first,
+      state,
+      regions,
+      report,
+    )) {
+      if (!branch.matches) {
+        result.push({
+          state: setRangePhase(branch.state, bit, "searching"),
+          selected: false,
+        });
+        continue;
+      }
+      for (const started of startedRangeStates(
+        branch.state,
+        second,
+        bit,
+        snapshot,
+        regions,
+      )) {
+        result.push({ state: started, selected: true });
+      }
+    }
+  }
+  if ((state.active & bit) !== 0n) {
+    for (const branch of evaluateAddress(
+      snapshot,
+      second,
+      state,
+      regions,
+      report,
+    )) {
+      result.push({
+        state: setRangePhase(
+          branch.state,
+          bit,
+          branch.matches ? "closedThisLine" : "active",
+        ),
+        selected: true,
       });
     }
   }
-
-  if (addressChild(address, "last_line_address") !== undefined) {
-    return partitionAddressStates(input, (state) => {
-      const lineKind = lineKindOf(state);
-      return lineKind === lineKinds.last || lineKind === lineKinds.only;
+  if ((state.closedThisLine & bit) !== 0n) {
+    result.push({
+      state: setRangePhase(state, bit, "closedThisLine"),
+      selected: false,
     });
   }
-
-  return { applied: new Set(input), skipped: new Set(input) };
+  return result;
 }
 
-function commandInputFlows(snapshot, command, input, report) {
-  const clause = command.childForFieldName("addresses");
-  let flows;
+function commandInputBranches(snapshot, metadata, command, state, report) {
+  const clause = addressClause(command);
+  let branches;
   if (clause === null) {
-    flows = { applied: new Set(input), skipped: new Set() };
+    branches = [{ state, selected: true }];
   } else {
-    const first = clause.childForFieldName("first");
     const second = clause.childForFieldName("second");
-    if (
-      second === null ||
-      addressChild(first, "last_line_address") !== undefined
-    ) {
-      flows = singleAddressFlows(snapshot, first, input, report);
+    if (second === null) {
+      branches = evaluateAddress(
+        snapshot,
+        clause.childForFieldName("first"),
+        state,
+        metadata.regions,
+        report,
+      ).map(({ state: next, matches }) => ({
+        state: next,
+        selected: matches,
+      }));
     } else {
-      const states = rangeAddressTransfer(snapshot, clause, input, report);
-      flows = { applied: states, skipped: new Set(states) };
+      branches = rangeAddressBranches(
+        snapshot,
+        clause,
+        state,
+        metadata.rangeByCommand.get(command.id),
+        metadata.regions,
+        report,
+      );
     }
   }
-
   if (command.childForFieldName("negation") !== null) {
-    return { applied: flows.skipped, skipped: flows.applied };
+    return branches.map((branch) => ({
+      ...branch,
+      selected: !branch.selected,
+    }));
   }
-  return flows;
+  return branches;
+}
+
+function replacementBackreferenceDiagnostic(snapshot, reference) {
+  const number = Number(textForNode(snapshot.source, reference).at(-1));
+  return diagnosticForNode(
+    reference,
+    "warning",
+    "unmatched-replacement-backreference",
+    `Replacement back-reference \\${number} can refer to a regular expression with fewer subexpressions.`,
+  );
 }
 
 function replacementTransfer(snapshot, substitute, input, report) {
@@ -1130,28 +1426,50 @@ function replacementTransfer(snapshot, substitute, input, report) {
     const number = Number(textForNode(snapshot.source, reference).at(-1));
     if (
       number !== 0 &&
-      [...state].some((value) => {
-        const count = groupCountOf(value);
-        return count === null || count < number;
-      })
+      (state.groupCount === null || state.groupCount < number)
     ) {
-      report(
-        diagnosticForNode(
-          reference,
-          "warning",
-          "unmatched-replacement-backreference",
-          `Replacement back-reference \\${number} can refer to a regular expression with fewer subexpressions.`,
-        ),
-      );
+      report(replacementBackreferenceDiagnostic(snapshot, reference));
     }
   }
-  return setUnion(
-    state,
-    new Set([...state].map((value) => withSubstitutionState(value, true))),
-  );
+  return state.substituted ? [state] : [state, { ...state, substituted: true }];
+}
+
+function flowTargets(snapshot) {
+  return {
+    empty: regexContainers(snapshot.tree.rootNode).filter(
+      (container) =>
+        hasTerminatingRegexDelimiter(container) &&
+        container.childForFieldName("expression") === null,
+    ),
+    references: descendants(
+      snapshot.tree.rootNode,
+      "replacement_backreference",
+    ).filter(
+      (reference) => textForNode(snapshot.source, reference).at(-1) !== "0",
+    ),
+  };
+}
+
+function conservativeFlowDiagnostics(snapshot, targets) {
+  const result = new Map();
+  const report = (value) => {
+    const key = [value.code, value.startOffset, value.endOffset].join(":");
+    result.set(key, value);
+  };
+  for (const container of targets.empty) {
+    report(emptyRegularExpressionDiagnostic(container));
+  }
+  for (const reference of targets.references) {
+    report(replacementBackreferenceDiagnostic(snapshot, reference));
+  }
+  return [...result.values()];
 }
 
 function regexFlowDiagnostics(snapshot, symbols) {
+  const targets = flowTargets(snapshot);
+  if (targets.empty.length === 0 && targets.references.length === 0) {
+    return [];
+  }
   const { entry, units } = createControlFlow(
     snapshot.source,
     snapshot.tree.rootNode,
@@ -1160,84 +1478,166 @@ function regexFlowDiagnostics(snapshot, symbols) {
   if (entry === undefined) {
     return [];
   }
-  const incoming = units.map(() => new Set());
-  incoming[entry].add(analysisState(null, false, lineKinds.first));
-  incoming[entry].add(analysisState(null, false, lineKinds.only));
-  const queued = new Set([entry]);
-  const queue = [entry];
+  const metadata = flowMetadata(snapshot, units);
+  const incoming = units.map(() => new Map());
+  const queued = new Set();
+  const queue = [];
   let queueIndex = 0;
+  let remainingWork = regexFlowWorkBudget;
+  let exhausted = false;
   const reported = new Map();
   const report = (value) => {
     const key = [value.code, value.startOffset, value.endOffset].join(":");
     reported.set(key, value);
   };
 
-  function propagate(edge, outgoing) {
-    if (edge.target === undefined) {
+  const rangeWordCost = 1 + Math.ceil(metadata.rangeCount / 64);
+  function consumeWork() {
+    remainingWork -= rangeWordCost;
+    if (remainingWork < 0) {
+      exhausted = true;
+      return false;
+    }
+    return true;
+  }
+
+  function addState(unit, state) {
+    if (unit === undefined || exhausted || !consumeWork()) {
       return;
     }
-    const states = edge.advancesInput
-      ? new Set([...outgoing].flatMap(nextInputStates))
-      : outgoing;
-    const destination = incoming[edge.target];
-    const previousSize = destination.size;
-    for (const state of states) {
-      destination.add(state);
+    const key = stateKey(state);
+    const destination = incoming[unit];
+    const current = destination.get(key);
+    let changed = false;
+    if (current === undefined) {
+      destination.set(key, state);
+      changed = true;
+    } else {
+      const line = joinIntervals(
+        current.line,
+        state.line,
+        metadata.regions[state.region],
+      );
+      const searching = current.searching | state.searching;
+      const active = current.active | state.active;
+      const closedThisLine = current.closedThisLine | state.closedThisLine;
+      changed =
+        !sameInterval(current.line, line) ||
+        searching !== current.searching ||
+        active !== current.active ||
+        closedThisLine !== current.closedThisLine;
+      if (changed) {
+        destination.set(key, {
+          ...current,
+          line,
+          searching,
+          active,
+          closedThisLine,
+        });
+      }
     }
-    if (destination.size !== previousSize && !queued.has(edge.target)) {
-      queue.push(edge.target);
-      queued.add(edge.target);
+    const queueKey = `${unit}/${key}`;
+    if (changed && !queued.has(queueKey)) {
+      queue.push({ key, queueKey, unit });
+      queued.add(queueKey);
     }
   }
 
-  while (queueIndex < queue.length) {
-    const id = queue[queueIndex];
+  function propagate(edge, state) {
+    if (edge.target === undefined || exhausted) {
+      return;
+    }
+    const states = edge.advancesInput
+      ? advanceInput(state, metadata.regions)
+      : [state];
+    for (const next of states) {
+      addState(edge.target, next);
+    }
+  }
+
+  const allRanges =
+    metadata.rangeCount === 0 ? 0n : (1n << BigInt(metadata.rangeCount)) - 1n;
+  for (const lastLine of [false, true]) {
+    addState(entry, {
+      groupCount: null,
+      substituted: false,
+      lastLine,
+      region: regionForLine(metadata.regions, 1n),
+      line: { minimum: 1n, maximum: 1n, stride: 0n },
+      searching: allRanges,
+      active: 0n,
+      closedThisLine: 0n,
+    });
+  }
+
+  while (queueIndex < queue.length && !exhausted) {
+    if (!consumeWork()) {
+      break;
+    }
+    const { key, queueKey, unit: id } = queue[queueIndex];
     queueIndex += 1;
-    queued.delete(id);
+    queued.delete(queueKey);
+    const state = incoming[id].get(key);
+    if (state === undefined) {
+      continue;
+    }
     const unit = units[id];
     if (unit.kind === "dispatch") {
       for (const edge of unit.edges) {
-        propagate(edge, incoming[id]);
+        propagate(edge, state);
       }
       continue;
     }
-    const commandInputs = commandInputFlows(
+    if (!metadata.trackedByCommand.get(unit.command.id)) {
+      const unique = new Map();
+      for (const edge of unit.edges) {
+        unique.set(
+          `${String(edge.target)}/${Number(edge.advancesInput)}`,
+          edge,
+        );
+      }
+      for (const edge of unique.values()) {
+        propagate(edge, state);
+      }
+      continue;
+    }
+    const branches = commandInputBranches(
       snapshot,
+      metadata,
       unit.command,
-      incoming[id],
+      state,
       report,
     );
-    const appliesFunction = unit.edges.some(({ route }) => route !== "skipped");
-    const applied =
-      appliesFunction && unit.functionNode?.type === "substitute_function"
-        ? replacementTransfer(
-            snapshot,
-            unit.functionNode,
-            commandInputs.applied,
-            report,
-          )
-        : new Set(commandInputs.applied);
+    const selected = branches.filter(({ selected }) => selected);
+    const skipped = branches.filter(({ selected }) => !selected);
+    const applied = selected.flatMap(({ state: input }) =>
+      unit.functionNode?.type === "substitute_function"
+        ? replacementTransfer(snapshot, unit.functionNode, input, report)
+        : [input],
+    );
     for (const edge of unit.edges) {
-      let outgoing;
       if (edge.route === "skipped") {
-        outgoing = commandInputs.skipped;
+        for (const branch of skipped) {
+          propagate(edge, branch.state);
+        }
       } else if (edge.route === "test-branch") {
-        outgoing = new Set(
-          [...commandInputs.applied]
-            .filter(hasSubstituted)
-            .map((state) => withSubstitutionState(state, false)),
-        );
+        for (const value of applied.filter(({ substituted }) => substituted)) {
+          propagate(edge, { ...value, substituted: false });
+        }
       } else if (edge.route === "test-fallthrough") {
-        outgoing = new Set(
-          [...commandInputs.applied].map((state) =>
-            withSubstitutionState(state, false),
-          ),
-        );
+        for (const value of applied.filter(({ substituted }) => !substituted)) {
+          propagate(edge, value);
+        }
       } else {
-        outgoing = applied;
+        for (const value of applied) {
+          propagate(edge, value);
+        }
       }
-      propagate(edge, outgoing);
     }
+  }
+  if (exhausted) {
+    // Exhaustion preserves soundness by reporting every flow-sensitive site.
+    return conservativeFlowDiagnostics(snapshot, targets);
   }
   return [...reported.values()];
 }

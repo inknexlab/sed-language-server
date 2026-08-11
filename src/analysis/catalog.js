@@ -7,25 +7,15 @@ const addressPrefixByMaximum = Object.freeze([
 function defineCommand({ verb, maximumAddresses, title, syntax, description }) {
   return Object.freeze({
     verb,
-    maximumAddresses,
     title,
     synopsis: `${addressPrefixByMaximum[maximumAddresses]}${syntax}`,
     description,
   });
 }
 
-function defineSubstitutionFlag({
-  nodeType,
-  spelling,
-  terminal,
-  title,
-  synopsis,
-  description,
-}) {
+function defineSubstitutionFlag({ nodeType, title, synopsis, description }) {
   return Object.freeze({
     nodeType,
-    spelling,
-    terminal,
     title,
     synopsis,
     description,
@@ -237,16 +227,12 @@ const commandReferenceList = Object.freeze([
 const substitutionFlagReferenceList = Object.freeze([
   defineSubstitutionFlag({
     nodeType: "occurrence_flag",
-    spelling: null,
-    terminal: false,
     title: "Occurrence",
     synopsis: "s/RE/replacement/n",
     description: "Replaces only the nth occurrence of RE in the pattern space.",
   }),
   defineSubstitutionFlag({
     nodeType: "global_flag",
-    spelling: "g",
-    terminal: false,
     title: "Global",
     synopsis: "s/RE/replacement/g",
     description:
@@ -254,16 +240,12 @@ const substitutionFlagReferenceList = Object.freeze([
   }),
   defineSubstitutionFlag({
     nodeType: "case_insensitive_flag",
-    spelling: "i",
-    terminal: false,
     title: "Case-Insensitive",
     synopsis: "s/RE/replacement/i",
     description: "Matches RE case-insensitively.",
   }),
   defineSubstitutionFlag({
     nodeType: "print_flag",
-    spelling: "p",
-    terminal: false,
     title: "Print on Substitution",
     synopsis: "s/RE/replacement/p",
     description:
@@ -271,8 +253,6 @@ const substitutionFlagReferenceList = Object.freeze([
   }),
   defineSubstitutionFlag({
     nodeType: "substitution_flag",
-    spelling: "w",
-    terminal: true,
     title: "Write on Substitution",
     synopsis: "s/RE/replacement/w wfile",
     description:
@@ -290,55 +270,8 @@ const substitutionFlagReferenceByType = new Map(
   ]),
 );
 
-export function assertDocumentationKind(kind) {
-  if (kind !== "markdown" && kind !== "plaintext") {
-    throw new TypeError(`Unsupported markup kind: ${String(kind)}`);
-  }
-}
-
-function maximumBacktickRun(value) {
-  let current = 0;
-  let maximum = 0;
-  for (const character of value) {
-    current = character === "`" ? current + 1 : 0;
-    maximum = Math.max(maximum, current);
-  }
-  return maximum;
-}
-
-function inlineCode(value) {
-  const backticks = maximumBacktickRun(value);
-  if (backticks === 0) {
-    return `\`${value}\``;
-  }
-  const fence = "`".repeat(backticks + 1);
-  return `${fence} ${value} ${fence}`;
-}
-
-export function referenceDocumentation(reference, kind) {
-  assertDocumentationKind(kind);
-  return kind === "markdown"
-    ? `\`\`\`sed\n${reference.synopsis}\n\`\`\`\n\n${reference.description}`
-    : `${reference.synopsis}\n\n${reference.description}`;
-}
-
-export function hoverDocumentation(documentation, kind) {
-  const reference = referenceDocumentation(documentation, kind);
-  return kind === "markdown"
-    ? `### ${inlineCode(documentation.display)} — ${documentation.title}\n\n${reference}`
-    : `${documentation.display} — ${documentation.title}\n\n${reference}`;
-}
-
-export function commandReferences() {
-  return commandReferenceList;
-}
-
 export function commandReferenceForVerb(verb) {
   return commandReferenceByVerb.get(verb);
-}
-
-export function substitutionFlagReferences() {
-  return substitutionFlagReferenceList;
 }
 
 export function substitutionFlagReferenceForType(nodeType) {

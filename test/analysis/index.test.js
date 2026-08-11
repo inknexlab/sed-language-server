@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  completions,
+import * as analysis from "@inknexlab/sed-language-server/analysis";
+
+const {
   definitions,
   diagnostics,
   format,
@@ -9,7 +10,19 @@ import {
   references,
   regularExpressionModes,
   SedParser,
-} from "@inknexlab/sed-language-server/analysis";
+} = analysis;
+
+test("exports exactly the public analysis interface", () => {
+  assert.deepEqual(Object.keys(analysis).sort(), [
+    "SedParser",
+    "definitions",
+    "diagnostics",
+    "format",
+    "hover",
+    "references",
+    "regularExpressionModes",
+  ]);
+});
 
 test("exposes sed analysis through the package subpath", async () => {
   assert.deepEqual(regularExpressionModes(), ["bre", "ere"]);
@@ -32,18 +45,6 @@ test("exposes sed analysis through the package subpath", async () => {
     assert.equal(format({ mode: "bre", source, tree }, {}), undefined);
     assert.deepEqual(definitions({ mode: "bre", source, tree }, 0), []);
     assert.deepEqual(references({ mode: "bre", source, tree }, 0, false), []);
-
-    const emptySource = "";
-    const emptyTree = parser.parse(emptySource);
-    try {
-      assert.equal(
-        completions({ mode: "bre", source: emptySource, tree: emptyTree }, 0)
-          .length,
-        26,
-      );
-    } finally {
-      emptyTree.delete();
-    }
   } finally {
     tree.delete();
     parser.delete();
@@ -56,7 +57,6 @@ test("accepts a parser-owned tree whose recovery root starts after source layout
   const tree = parser.parse(source);
   const snapshot = { mode: "bre", source, tree };
   try {
-    assert.deepEqual(completions(snapshot, 0), []);
     assert.deepEqual(
       diagnostics(snapshot).map(({ code }) => code),
       ["unmatched-closing-brace"],

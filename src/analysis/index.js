@@ -1,4 +1,3 @@
-export { completions } from "./completion.js";
 export { diagnostics } from "./diagnostics.js";
 export { format } from "./formatting.js";
 export { hover } from "./hover.js";

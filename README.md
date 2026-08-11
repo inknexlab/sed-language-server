@@ -4,9 +4,11 @@
 
 A language server for POSIX.1-2024 `sed`.
 
-## Installation
+## Requirements
 
-Requires Node.js 22 or later.
+- Node.js 22 or later
+
+## Installation
 
 ```sh
 npm install --global @inknexlab/sed-language-server
@@ -14,7 +16,6 @@ npm install --global @inknexlab/sed-language-server
 
 ## Features
 
-- Completion
 - Diagnostics
 - Find References
 - Formatting
@@ -23,36 +24,47 @@ npm install --global @inknexlab/sed-language-server
 
 ## Emacs
 
-Emacs does not include a major mode for `sed`. After defining one, register its
-mode symbol with Eglot:
+Install `sed-ts-mode` and either Eglot or `lsp-mode`.
+
+For Eglot:
 
 ```elisp
 (require 'eglot)
 
 (add-to-list 'eglot-server-programs
-             '(your-sed-mode .
+             '((sed-ts-mode :language-id "sed")
+               .
                ("sed-language-server" "--stdio")))
+(add-hook 'sed-ts-mode-hook #'eglot-ensure)
+```
+
+For `lsp-mode`:
+
+```elisp
+(require 'lsp-mode)
+
+(add-to-list 'lsp-language-id-configuration '(sed-ts-mode . "sed"))
+(add-hook 'sed-ts-mode-hook #'lsp-deferred)
 ```
 
 The server uses POSIX Basic Regular Expressions by default. To use POSIX
-Extended Regular Expressions, add the `regex` initialization option to the
-server entry:
+Extended Regular Expressions with Eglot, replace the server entry above with:
 
 ```elisp
 (add-to-list 'eglot-server-programs
-             '(your-sed-mode .
+             '((sed-ts-mode :language-id "sed")
+               .
                ("sed-language-server" "--stdio"
                 :initializationOptions (:regex "ere"))))
 ```
 
 The selected regular expression mode remains fixed for the server process.
 
-## Implementation
+## Parser
 
-Uses the POSIX CST from
-[tree-sitter-posix-sed](https://github.com/inknexlab/tree-sitter-posix-sed) for
-parsing. The `./analysis` package export provides the source-offset language
-features used by this server for other language-server integrations.
+Includes a WebAssembly parser generated from
+[tree-sitter-posix-sed](https://github.com/inknexlab/tree-sitter-posix-sed).
+Its source revision is recorded in `vendor/tree-sitter-posix-sed.json`.
 
 ## License
 

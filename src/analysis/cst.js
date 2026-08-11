@@ -1,32 +1,3 @@
-const functionTypes = new Set([
-  "append_function",
-  "block_function",
-  "branch_function",
-  "change_function",
-  "comment_function",
-  "delete_first_line_function",
-  "delete_function",
-  "exchange_function",
-  "get_append_function",
-  "get_function",
-  "hold_append_function",
-  "hold_function",
-  "insert_function",
-  "label_function",
-  "line_number_function",
-  "list_function",
-  "next_append_function",
-  "next_function",
-  "print_first_line_function",
-  "print_function",
-  "quit_function",
-  "read_function",
-  "substitute_function",
-  "test_function",
-  "translate_function",
-  "write_function",
-]);
-
 function requiredNamedChild(node) {
   if (node.namedChildCount !== 1) {
     throw new Error(`${node.type} must have exactly one named child.`);
@@ -87,13 +58,7 @@ export function functionForCommand(command) {
   if (wrapper === null) {
     return undefined;
   }
-  for (let index = 0; index < wrapper.namedChildCount; index += 1) {
-    const child = wrapper.namedChild(index);
-    if (child !== null && functionTypes.has(child.type)) {
-      return child;
-    }
-  }
-  return undefined;
+  return wrapper.namedChildren.find(({ type }) => type.endsWith("_function"));
 }
 
 export function structuredIssues(root) {

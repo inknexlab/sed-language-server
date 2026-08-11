@@ -10,14 +10,26 @@ const formattableOutcomes = new Set([
   "implementation_defined_syntax",
   "implementation_option_syntax",
 ]);
+const maximumFormattedSourceLength = 2 ** 24;
 
-function indentation(options) {
-  if (options?.insertSpaces === false) {
-    return "\t";
+function normalizeIndentation(options) {
+  if (
+    options !== undefined &&
+    (options === null || typeof options !== "object" || Array.isArray(options))
+  ) {
+    throw new TypeError("Sed formatting options must be an object.");
   }
-  const requested = Number(options?.tabSize);
-  const width = Number.isInteger(requested) && requested > 0 ? requested : 2;
-  return " ".repeat(width);
+  const insertSpaces = options?.insertSpaces ?? true;
+  if (typeof insertSpaces !== "boolean") {
+    throw new TypeError("insertSpaces must be a boolean.");
+  }
+  const width = options?.tabSize ?? 2;
+  if (!Number.isSafeInteger(width) || width <= 0) {
+    throw new TypeError("tabSize must be a positive safe integer.");
+  }
+  return insertSpaces
+    ? { character: " ", width }
+    : { character: "\t", width: 1 };
 }
 
 function structuralStart(command) {
@@ -37,6 +49,23 @@ function emptySeparator(emptyCommand) {
 
 function renderCommandList(source, commandList, indent) {
   const rendered = [];
+  let renderedLength = 0;
+
+  function appendLine(depth, text) {
+    const prefixLength = indent.width * depth;
+    const lineLength = prefixLength + text.length;
+    if (
+      !Number.isSafeInteger(prefixLength) ||
+      !Number.isSafeInteger(lineLength) ||
+      renderedLength + lineLength + 1 > maximumFormattedSourceLength
+    ) {
+      return false;
+    }
+    rendered.push(indent.character.repeat(prefixLength) + text);
+    renderedLength += lineLength + 1;
+    return true;
+  }
+
   const frames = [
     {
       commandList,
@@ -52,7 +81,9 @@ function renderCommandList(source, commandList, indent) {
     if (frame.nextChildIndex >= frame.commandList.namedChildCount) {
       frames.pop();
       if (frame.closingLine !== undefined) {
-        rendered.push(frame.closingLine);
+        if (!appendLine(frame.closingLine.depth, frame.closingLine.text)) {
+          return undefined;
+        }
       }
       continue;
     }
@@ -62,13 +93,16 @@ function renderCommandList(source, commandList, indent) {
       continue;
     }
     if (child.type === "editing_command") {
-      const prefix = indent.repeat(frame.depth);
       const functionNode = functionForCommand(child);
       if (functionNode?.type !== "block_function") {
-        rendered.push(
-          prefix +
+        if (
+          !appendLine(
+            frame.depth,
             textForIndices(source, structuralStart(child), child.endIndex),
-        );
+          )
+        ) {
+          return undefined;
+        }
         frame.awaitingCommandNewline = true;
         frame.skippedOpeningNewline = true;
         continue;
@@ -80,9 +114,14 @@ function renderCommandList(source, commandList, indent) {
       if (verb === null || commands === null || closing === null) {
         continue;
       }
-      rendered.push(
-        prefix + textForIndices(source, structuralStart(child), verb.endIndex),
-      );
+      if (
+        !appendLine(
+          frame.depth,
+          textForIndices(source, structuralStart(child), verb.endIndex),
+        )
+      ) {
+        return undefined;
+      }
       frame.awaitingCommandNewline = true;
       frame.skippedOpeningNewline = true;
       frames.push({
@@ -91,8 +130,10 @@ function renderCommandList(source, commandList, indent) {
         depth: frame.depth + 1,
         skippedOpeningNewline: false,
         awaitingCommandNewline: false,
-        closingLine:
-          prefix + textForIndices(source, closing.startIndex, closing.endIndex),
+        closingLine: {
+          depth: frame.depth,
+          text: textForIndices(source, closing.startIndex, closing.endIndex),
+        },
       });
       continue;
     }
@@ -121,7 +162,9 @@ function renderCommandList(source, commandList, indent) {
       frame.skippedOpeningNewline = true;
       continue;
     }
-    rendered.push("");
+    if (!appendLine(0, "")) {
+      return undefined;
+    }
   }
   return rendered;
 }
@@ -144,6 +187,7 @@ function preserveDefaultOutputBehavior(defaultOutputSuppressed, formatted) {
 
 export function format(snapshot, options) {
   assertSnapshot(snapshot);
+  const indent = normalizeIndentation(options);
   const { source, tree } = snapshot;
   if (!canFormat(tree.rootNode)) {
     return undefined;
@@ -154,13 +198,19 @@ export function format(snapshot, options) {
   const rendered =
     commandList === undefined
       ? []
-      : renderCommandList(source, commandList, indentation(options));
+      : renderCommandList(source, commandList, indent);
+  if (rendered === undefined) {
+    return undefined;
+  }
   const defaultOutputSuppressed =
     tree.rootNode.descendantsOfType("default_output_suppression").length > 0;
   const formatted = preserveDefaultOutputBehavior(
     defaultOutputSuppressed,
     `${rendered.join("\n")}\n`,
   );
+  if (formatted.length > maximumFormattedSourceLength) {
+    return undefined;
+  }
   if (formatted === source) {
     return undefined;
   }

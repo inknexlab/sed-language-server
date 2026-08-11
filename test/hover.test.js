@@ -46,3 +46,22 @@ test("maps astral source offsets to UTF-16 Hover ranges", async () => {
     );
   });
 });
+
+test("fences backtick Hover text after an astral character", async () => {
+  await withSnapshot("s/😀/x/;\\``p\n", (snapshot) => {
+    assert.deepEqual(
+      hover(snapshot, { line: 0, character: 9 }, MarkupKind.Markdown),
+      {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value:
+            "### ``` \\`` ``` — Empty Regular Expression\n\n```sed\n\\``\n```\n\nBehaves as if the most recently applied regular expression from a context address or substitute command were specified.",
+        },
+        range: {
+          start: { line: 0, character: 8 },
+          end: { line: 0, character: 11 },
+        },
+      },
+    );
+  });
+});

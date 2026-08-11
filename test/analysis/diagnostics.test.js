@@ -371,6 +371,52 @@ test("stops at a quit command selected on the first input line", async () => {
   }
 });
 
+test("tracks exact numeric addresses across input cycles", async () => {
+  assert.equal(
+    codes(await diagnosticsFor("1d\n2q\ns//x/\n")).includes(
+      "empty-regular-expression-without-previous",
+    ),
+    false,
+  );
+});
+
+test("preserves input-line strides without enumerating address values", async () => {
+  const hugeOdd = "9".repeat(301);
+  const hugeEven = `${hugeOdd.slice(0, -1)}8`;
+  for (const [source, expected] of [
+    ["n\n5!d\ns//x/\n", false],
+    ["n\n4!d\ns//x/\n", true],
+    [`n\n${hugeOdd}!d\ns//x/\n`, false],
+    [`n\n${hugeEven}!d\ns//x/\n`, true],
+  ]) {
+    assert.equal(
+      codes(await diagnosticsFor(source)).includes(
+        "empty-regular-expression-without-previous",
+      ),
+      expected,
+      source,
+    );
+  }
+});
+
+test("tracks two-address ranges across cycles and same-line restarts", async () => {
+  for (const [source, expected] of [
+    ["1,$d\ns//x/\n", false],
+    ["2,$d\ns//x/\n", true],
+    ["1,1d\ns//x/\n", true],
+    [":again\n1,1b again\n2q\ns//x/\n", true],
+    ["1N\n2,2D\n3q\ns//x/\n", true],
+  ]) {
+    assert.equal(
+      codes(await diagnosticsFor(source)).includes(
+        "empty-regular-expression-without-previous",
+      ),
+      expected,
+      source,
+    );
+  }
+});
+
 test("does not evaluate a second range address after a last-line start", async () => {
   assert.equal(
     codes(await diagnosticsFor("/^\\(.*\\)$/p\n$,/b/p\ns//\\1/\n")).includes(
@@ -484,5 +530,36 @@ test("handles many duplicate labels and branches without a quadratic graph", {
       (code) => code === "duplicate-label",
     ).length,
     count,
+  );
+});
+
+test("collapses inert numeric selections before regular-expression flow", {
+  timeout: 3000,
+}, async () => {
+  const commands = Array.from(
+    { length: 2000 },
+    (_, index) => `${index + 1}p`,
+  ).join("\n");
+  assert.deepEqual(await diagnosticsFor(`${commands}\n`), []);
+  assert.equal(
+    codes(await diagnosticsFor(`${commands}\ns//x/\n`)).includes(
+      "empty-regular-expression-without-previous",
+    ),
+    true,
+  );
+});
+
+test("bounds flow through many relevant numeric addresses", {
+  timeout: 3000,
+}, async () => {
+  const commands = Array.from(
+    { length: 2000 },
+    (_, index) => `${index + 2}q`,
+  ).join("\n");
+  assert.equal(
+    codes(await diagnosticsFor(`${commands}\ns//x/\n`)).includes(
+      "empty-regular-expression-without-previous",
+    ),
+    true,
   );
 });

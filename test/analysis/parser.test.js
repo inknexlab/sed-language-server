@@ -87,6 +87,7 @@ test("validates incremental tree ownership and source edits", async () => {
     SedParser.create("ere"),
   ]);
   const breTree = bre.parse("1,2p\n");
+  const recoveryTree = bre.parse("}}{};}{}");
   const ereTree = ere.parse("p\n");
   try {
     assert.throws(() => bre.reparse("p\n", ereTree, []), {
@@ -97,6 +98,20 @@ test("validates incremental tree ownership and source edits", async () => {
       name: "TypeError",
       message: "The incremental edits must produce the requested sed source.",
     });
+    assert.throws(() => bre.reparse("x}}{};}{}", recoveryTree, []), {
+      name: "TypeError",
+      message: "The incremental edits must produce the requested sed source.",
+    });
+    assert.throws(
+      () =>
+        bre.reparse("}}{};}{}", recoveryTree, [
+          { startIndex: -1, oldEndIndex: 0, text: "" },
+        ]),
+      {
+        name: "TypeError",
+        message: "Invalid incremental source edit.",
+      },
+    );
 
     const reparsed = bre.reparse("1,2q\n", breTree, [
       { startIndex: 3, oldEndIndex: 4, text: "q" },
@@ -116,8 +131,95 @@ test("validates incremental tree ownership and source edits", async () => {
     }
   } finally {
     breTree.delete();
+    recoveryTree.delete();
     ereTree.delete();
     bre.delete();
     ere.delete();
+  }
+});
+
+test("matches full parses across canonical and recovery transitions", async () => {
+  const parser = await SedParser.create("bre");
+  const cases = [
+    {
+      name: "canonical to canonical",
+      previousSource: "p\n",
+      source: "q\n",
+      expectedError: false,
+      expectedIssue: false,
+    },
+    {
+      name: "canonical to native recovery",
+      previousSource: "p\n",
+      source: "}}{};}{}",
+      expectedError: true,
+      expectedIssue: true,
+    },
+    {
+      name: "native recovery to native recovery",
+      previousSource: "}}{};}{}",
+      source: "x}}{};}{}",
+      expectedError: true,
+      expectedIssue: true,
+    },
+    {
+      name: "canonical to structured recovery",
+      previousSource: "p\n",
+      source: "s/",
+      expectedError: false,
+      expectedIssue: true,
+    },
+    {
+      name: "structured recovery after a split surrogate pair",
+      previousSource: "s😀p😀d😀!n2D",
+      source: "s😀p😀d\ud83db:!n2D",
+      edits: [{ startIndex: 8, oldEndIndex: 9, text: "b:" }],
+      expectedError: false,
+      expectedIssue: true,
+    },
+  ];
+
+  try {
+    for (const {
+      edits,
+      expectedError,
+      expectedIssue,
+      name,
+      previousSource,
+      source,
+    } of cases) {
+      const previous = parser.parse(previousSource);
+      const incremental = parser.reparse(
+        source,
+        previous,
+        edits ?? [
+          {
+            startIndex: 0,
+            oldEndIndex: previousSource.length,
+            text: source,
+          },
+        ],
+      );
+      const full = parser.parse(source);
+      try {
+        assert.equal(incremental.rootNode.hasError, expectedError, name);
+        assert.equal(
+          incremental.rootNode.descendantsOfType("syntax_issue").length > 0,
+          expectedIssue,
+          name,
+        );
+        assert.equal(
+          incremental.rootNode.toString(),
+          full.rootNode.toString(),
+          name,
+        );
+      } finally {
+        previous.delete();
+        incremental.delete();
+        full.delete();
+      }
+    }
+  } finally {
+    parser.delete();
   }
 });

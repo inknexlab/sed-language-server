@@ -10,7 +10,6 @@ import {
   TextDocuments,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { completionItems } from "./completion.js";
 import { diagnostics } from "./diagnostics.js";
 import { formattingEdits } from "./formatting.js";
 import { hover } from "./hover.js";
@@ -25,7 +24,6 @@ const connection = createConnection();
 const diagnosticDelay = 50;
 const diagnosticTimers = new Map();
 let syntaxStore;
-let completionDocumentationKind = preferredMarkupKind();
 let hoverContentKind = preferredMarkupKind();
 
 function preferredMarkupKind(formats) {
@@ -141,9 +139,6 @@ const documents = new TextDocuments({
 
 connection.onInitialize(async ({ capabilities, initializationOptions }) => {
   const mode = initializationMode(initializationOptions);
-  completionDocumentationKind = preferredMarkupKind(
-    capabilities.textDocument?.completion?.completionItem?.documentationFormat,
-  );
   hoverContentKind = preferredMarkupKind(
     capabilities.textDocument?.hover?.contentFormat,
   );
@@ -155,7 +150,6 @@ connection.onInitialize(async ({ capabilities, initializationOptions }) => {
         openClose: true,
         change: TextDocumentSyncKind.Incremental,
       },
-      completionProvider: {},
       definitionProvider: true,
       referencesProvider: true,
       hoverProvider: true,
@@ -186,13 +180,6 @@ documents.onDidClose(({ document }) => {
   });
 });
 
-connection.onCompletion(({ textDocument, position }) => {
-  const current = snapshot(textDocument.uri);
-  return current === undefined
-    ? []
-    : completionItems(current, position, completionDocumentationKind);
-});
-
 connection.onDefinition(({ textDocument, position }) => {
   const current = snapshot(textDocument.uri);
   return current === undefined ? [] : definitions(current, position);
@@ -221,7 +208,6 @@ connection.onShutdown(() => {
   cancelAllDiagnostics();
   syntaxStore?.dispose();
   syntaxStore = undefined;
-  completionDocumentationKind = preferredMarkupKind();
   hoverContentKind = preferredMarkupKind();
 });
 
@@ -229,7 +215,6 @@ connection.onExit(() => {
   cancelAllDiagnostics();
   syntaxStore?.dispose();
   syntaxStore = undefined;
-  completionDocumentationKind = preferredMarkupKind();
   hoverContentKind = preferredMarkupKind();
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "@inknexlab/sed-language-server",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Language server for POSIX.1-2024 sed.",
   "type": "module",
   "files": [

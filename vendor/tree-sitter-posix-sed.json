@@ -1,5 +1,5 @@
 {
-  "revision": "38b635ec26e6fd403e250b2932706cac15f36311",
+  "revision": "5a1270d54337c909a8fca6b0dda396d579da79b1",
   "languages": {
     "bre": {
       "language": "posix_sed_bre",
@@ -16,13 +16,17 @@
           "omitted_file_separator"
         ],
         "incomplete_syntax": [
+          "incomplete_bracket_term",
+          "incomplete_interval",
           "incomplete_regular_expression",
           "incomplete_regular_expression_escape",
           "incomplete_replacement",
           "incomplete_replacement_escape",
           "incomplete_translation",
           "incomplete_translation_escape",
+          "missing_bracket_list",
           "missing_closing_brace",
+          "missing_command_separator",
           "missing_function",
           "missing_label",
           "missing_opening_delimiter",
@@ -30,7 +34,9 @@
           "missing_subexpression",
           "missing_text",
           "missing_text_introducer",
-          "missing_wfile"
+          "missing_wfile",
+          "unclosed_bracket_expression",
+          "unclosed_subexpression"
         ],
         "nonconforming_syntax": [
           "additional_address",
@@ -38,21 +44,29 @@
           "duplicate_negation",
           "excess_addresses",
           "forbidden_command_separator",
-          "invalid_address",
+          "forbidden_regular_expression_newline",
           "invalid_delimiter",
           "invalid_substitution_flag",
           "missing_address_separator",
           "missing_command_separator",
+          "missing_function",
+          "missing_label",
+          "missing_opening_delimiter",
+          "missing_rfile",
+          "missing_text_introducer",
+          "missing_wfile",
           "unexpected_command_text",
           "unknown_function",
           "unmatched_closing_brace",
-          "zero_substitution_occurrence"
+          "unterminated_regular_expression",
+          "unterminated_replacement",
+          "unterminated_translation"
         ],
         "undefined_syntax": [
           "adjacent_duplication_symbol",
           "character_class_range_end",
           "character_class_range_start",
-          "empty_alternative",
+          "command_after_write_flag",
           "empty_subexpression",
           "leading_duplication_symbol",
           "malformed_bracket_term",
@@ -85,13 +99,18 @@
       "outcomes": {
         "implementation_option_syntax": ["omitted_file_separator"],
         "incomplete_syntax": [
+          "incomplete_alternative",
+          "incomplete_bracket_term",
+          "incomplete_interval",
           "incomplete_regular_expression",
           "incomplete_regular_expression_escape",
           "incomplete_replacement",
           "incomplete_replacement_escape",
           "incomplete_translation",
           "incomplete_translation_escape",
+          "missing_bracket_list",
           "missing_closing_brace",
+          "missing_command_separator",
           "missing_function",
           "missing_label",
           "missing_opening_delimiter",
@@ -99,7 +118,9 @@
           "missing_subexpression",
           "missing_text",
           "missing_text_introducer",
-          "missing_wfile"
+          "missing_wfile",
+          "unclosed_bracket_expression",
+          "unclosed_subexpression"
         ],
         "nonconforming_syntax": [
           "additional_address",
@@ -107,20 +128,29 @@
           "duplicate_negation",
           "excess_addresses",
           "forbidden_command_separator",
-          "invalid_address",
+          "forbidden_regular_expression_newline",
           "invalid_delimiter",
           "invalid_substitution_flag",
           "missing_address_separator",
           "missing_command_separator",
+          "missing_function",
+          "missing_label",
+          "missing_opening_delimiter",
+          "missing_rfile",
+          "missing_text_introducer",
+          "missing_wfile",
           "unexpected_command_text",
           "unknown_function",
           "unmatched_closing_brace",
-          "zero_substitution_occurrence"
+          "unterminated_regular_expression",
+          "unterminated_replacement",
+          "unterminated_translation"
         ],
         "undefined_syntax": [
           "adjacent_duplication_symbol",
           "character_class_range_end",
           "character_class_range_start",
+          "command_after_write_flag",
           "empty_alternative",
           "empty_subexpression",
           "leading_duplication_symbol",

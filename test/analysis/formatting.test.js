@@ -1,0 +1,143 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { format as analyzeFormat } from "../../src/analysis/formatting.js";
+import { withAnalysisSnapshot } from "./helpers.js";
+
+async function format(source, mode = "bre", options = {}) {
+  return withAnalysisSnapshot(mode, source, (snapshot) => {
+    const formatted = analyzeFormat(snapshot, options);
+    return {
+      changed: formatted !== undefined,
+      text: formatted ?? source,
+    };
+  });
+}
+
+test("puts each command on a line and indents nested blocks", async () => {
+  const source = "  1,2{;p;s/a/b/g;\n\n};q;p";
+  const { text } = await format(source, "bre", {
+    insertSpaces: true,
+    tabSize: 2,
+  });
+  assert.equal(text, "1,2{\n  p\n  s/a/b/g\n\n}\nq\np\n");
+});
+
+test("uses tabs when the client requests tab indentation", async () => {
+  const { text } = await format("{\n{\np\n}\n}\n", "ere", {
+    insertSpaces: false,
+    tabSize: 8,
+  });
+  assert.equal(text, "{\n\t{\n\t\tp\n\t}\n}\n");
+});
+
+test("preserves leading, interior, and trailing blank lines", async () => {
+  const { text } = await format("\n\n p\n\n{\n\nq\n\n}\n\n");
+  assert.equal(text, "\n\np\n\n{\n\n  q\n\n}\n\n");
+});
+
+test("does not rewrite multiline text payloads", async () => {
+  const source = "  a\\\n  first\\\n second\n p";
+  const { text } = await format(source);
+  assert.equal(text, "a\\\n  first\\\n second\np\n");
+});
+
+test("preserves carriage returns in command operands", async () => {
+  const cases = [
+    ["#n\r\np;p", "#n\r\np\np\n"],
+    ["r file\r\np;p", "r file\r\np\np\n"],
+    ["a\\\ntext\r\np;p", "a\\\ntext\r\np\np\n"],
+  ];
+  for (const [source, expected] of cases) {
+    assert.equal((await format(source)).text, expected, JSON.stringify(source));
+  }
+});
+
+test("does not rewrite escaped newlines inside a replacement", async () => {
+  const source = " s/a/first\\\n second/;p";
+  const { text } = await format(source);
+  assert.equal(text, "s/a/first\\\n second/\np\n");
+});
+
+test("preserves regular expression, translation, and line operands", async () => {
+  const source =
+    " s界a界b界;p\ny|a\\n\\||b\\\\c|;p\n:label\nb label\nr file name\n# comment ; untouched\np";
+  const { text } = await format(source);
+  assert.equal(
+    text,
+    "s界a界b界\np\ny|a\\n\\||b\\\\c|\np\n:label\nb label\nr file name\n# comment ; untouched\np\n",
+  );
+});
+
+test("preserves the special meaning of an initial #n comment", async () => {
+  const cases = [
+    ["#n\n p;p", "#n\np\np\n"],
+    [" #n\np", " #n\np\n"],
+    [";#n\np", " #n\np\n"],
+    ["{;#n\np\n}", "{\n  #n\n  p\n}\n"],
+  ];
+  for (const [source, expected] of cases) {
+    assert.equal((await format(source)).text, expected, JSON.stringify(source));
+  }
+});
+
+test("formats POSIX-permitted implementation variations", async () => {
+  assert.equal((await format("/a\\+b/p;p")).text, "/a\\+b/p\np\n");
+  assert.equal((await format("rfile\np;p")).text, "rfile\np\np\n");
+});
+
+test("does not format syntax with unsafe POSIX outcomes", async () => {
+  for (const source of [
+    "r\n",
+    "p tail\n",
+    "/a**/p;p",
+    "1! p;p",
+    "s/a/b/w file;p\n",
+    "\0",
+  ]) {
+    const result = await format(source);
+    assert.equal(result.changed, false, JSON.stringify(source));
+    assert.equal(result.text, source);
+  }
+});
+
+test("adds a final POSIX newline", async () => {
+  assert.equal((await format("p")).text, "p\n");
+  assert.equal((await format("p\n")).changed, false);
+});
+
+test("does not rewrite CRLF input", async () => {
+  const source = "p\r\nq\r\n";
+  const result = await format(source);
+  assert.equal(result.changed, false);
+  assert.equal(result.text, source);
+});
+
+test("formats deeply nested blocks without using the call stack", async () => {
+  const depth = 3000;
+  const source = `${"{".repeat(depth)}p;${"};".repeat(depth - 1)}}`;
+  const { changed, text } = await format(source, "bre", {
+    insertSpaces: false,
+    tabSize: 8,
+  });
+  const lines = text.split("\n");
+  assert.equal(changed, true);
+  assert.equal(lines.length, 6002);
+  assert.equal(text.length, 9_012_002);
+  assert.equal(lines[0], "{");
+  assert.equal(lines[3000], `${"\t".repeat(depth)}p`);
+  assert.equal(lines[3001], `${"\t".repeat(depth - 1)}}`);
+  assert.equal(lines[6000], "}");
+  assert.equal(lines[6001], "");
+});
+
+test("is idempotent in both regular-expression modes", async () => {
+  const source = "1,2{\n  p\n\n  s/a/b/g\n}\n";
+  for (const mode of ["bre", "ere"]) {
+    const first = await format(source, mode, {
+      insertSpaces: true,
+      tabSize: 2,
+    });
+    assert.equal(first.text, source);
+    assert.equal(first.changed, false);
+  }
+});

@@ -51,7 +51,8 @@ The selected regular expression mode remains fixed for the server process.
 
 Uses the POSIX CST from
 [tree-sitter-posix-sed](https://github.com/inknexlab/tree-sitter-posix-sed) for
-parsing.
+parsing. The `./analysis` package export provides the source-offset language
+features used by this server for other language-server integrations.
 
 ## License
 

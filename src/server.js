@@ -14,14 +14,16 @@ import { completionItems } from "./completion.js";
 import { diagnostics } from "./diagnostics.js";
 import { formattingEdits } from "./formatting.js";
 import { hover } from "./hover.js";
-import { definitions, references } from "./labels.js";
 import { regularExpressionModes, SyntaxStore } from "./parser.js";
+import { definitions, references } from "./symbols.js";
 
 if (process.argv.length === 2) {
   process.argv.push("--stdio");
 }
 
 const connection = createConnection();
+const diagnosticDelay = 50;
+const diagnosticTimers = new Map();
 let syntaxStore;
 let completionDocumentationKind = preferredMarkupKind();
 let hoverContentKind = preferredMarkupKind();
@@ -38,14 +40,10 @@ function preferredMarkupKind(formats) {
 }
 
 function initializationMode(options) {
-  if (options === undefined) {
+  if (options === undefined || options === null) {
     return "bre";
   }
-  if (
-    options === null ||
-    typeof options !== "object" ||
-    Array.isArray(options)
-  ) {
+  if (typeof options !== "object" || Array.isArray(options)) {
     throw new ResponseError(
       ErrorCodes.InvalidParams,
       "initializationOptions must be an object.",
@@ -75,20 +73,63 @@ function store() {
   return syntaxStore;
 }
 
-function snapshot(uri) {
-  return syntaxStore?.snapshot(uri);
+function snapshot(uri, version) {
+  return syntaxStore?.snapshot(uri, version);
 }
 
-function publishDiagnostics(uri) {
-  const current = snapshot(uri);
+function publishDiagnostics(uri, version) {
+  const current = snapshot(uri, version);
   if (current === undefined) {
+    return;
+  }
+  const values = diagnostics(current);
+  if (snapshot(uri, version) === undefined) {
     return;
   }
   connection.sendDiagnostics({
     uri,
-    version: current.document.version,
-    diagnostics: diagnostics(current),
+    version,
+    diagnostics: values,
   });
+}
+
+function cancelDiagnostics(uri) {
+  const timer = diagnosticTimers.get(uri);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    diagnosticTimers.delete(uri);
+  }
+}
+
+function cancelAllDiagnostics() {
+  for (const timer of diagnosticTimers.values()) {
+    clearTimeout(timer);
+  }
+  diagnosticTimers.clear();
+}
+
+function diagnosticError(error) {
+  return error instanceof Error
+    ? (error.stack ?? error.message)
+    : String(error);
+}
+
+function scheduleDiagnostics(uri, version) {
+  cancelDiagnostics(uri);
+  const timer = setTimeout(() => {
+    if (diagnosticTimers.get(uri) !== timer) {
+      return;
+    }
+    diagnosticTimers.delete(uri);
+    try {
+      publishDiagnostics(uri, version);
+    } catch (error) {
+      connection.console.error(
+        `Failed to analyze ${uri}: ${diagnosticError(error)}`,
+      );
+    }
+  }, diagnosticDelay);
+  diagnosticTimers.set(uri, timer);
 }
 
 const documents = new TextDocuments({
@@ -128,13 +169,15 @@ connection.onInitialize(async ({ capabilities, initializationOptions }) => {
 
 documents.onDidOpen(({ document }) => {
   store().open(document);
+  scheduleDiagnostics(document.uri, document.version);
 });
 
 documents.onDidChangeContent(({ document }) => {
-  publishDiagnostics(document.uri);
+  scheduleDiagnostics(document.uri, document.version);
 });
 
 documents.onDidClose(({ document }) => {
+  cancelDiagnostics(document.uri);
   syntaxStore?.close(document.uri);
   connection.sendDiagnostics({
     uri: document.uri,
@@ -152,11 +195,7 @@ connection.onCompletion(({ textDocument, position }) => {
 
 connection.onDefinition(({ textDocument, position }) => {
   const current = snapshot(textDocument.uri);
-  if (current === undefined) {
-    return null;
-  }
-  const locations = definitions(current, position);
-  return locations.length === 0 ? null : locations;
+  return current === undefined ? [] : definitions(current, position);
 });
 
 connection.onHover(({ textDocument, position }) => {
@@ -168,10 +207,9 @@ connection.onHover(({ textDocument, position }) => {
 
 connection.onReferences(({ textDocument, position, context }) => {
   const current = snapshot(textDocument.uri);
-  if (current === undefined) {
-    return null;
-  }
-  return references(current, position, context.includeDeclaration);
+  return current === undefined
+    ? []
+    : references(current, position, context.includeDeclaration);
 });
 
 connection.onDocumentFormatting(({ textDocument, options }) => {
@@ -180,6 +218,7 @@ connection.onDocumentFormatting(({ textDocument, options }) => {
 });
 
 connection.onShutdown(() => {
+  cancelAllDiagnostics();
   syntaxStore?.dispose();
   syntaxStore = undefined;
   completionDocumentationKind = preferredMarkupKind();
@@ -187,6 +226,7 @@ connection.onShutdown(() => {
 });
 
 connection.onExit(() => {
+  cancelAllDiagnostics();
   syntaxStore?.dispose();
   syntaxStore = undefined;
   completionDocumentationKind = preferredMarkupKind();

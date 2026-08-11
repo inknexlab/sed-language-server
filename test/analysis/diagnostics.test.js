@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  diagnosticPolicies,
+  diagnosticMessages,
+  diagnosticSeverities,
   diagnostics,
   syntaxDiagnostics,
-} from "../src/analysis/diagnostics.js";
-import { grammarManifest, SedParser } from "../src/analysis/parser.js";
+} from "../../src/analysis/diagnostics.js";
+import { grammarManifest, SedParser } from "../../src/analysis/parser.js";
 
 async function diagnosticsFor(source, mode = "bre", syntaxOnly = false) {
   const parser = await SedParser.create(mode);
@@ -23,37 +24,6 @@ function codes(values) {
   return values.map(({ code }) => code);
 }
 
-test("validates diagnostic source and grammar ownership", async () => {
-  const parser = await SedParser.create("bre");
-  const tree = parser.parse("p\n");
-  try {
-    assert.throws(() => diagnostics({ mode: "bre", source: null, tree }), {
-      name: "TypeError",
-      message: "The sed source must be a string.",
-    });
-    assert.throws(() => diagnostics({ mode: "ere", source: "p\n", tree }), {
-      name: "TypeError",
-      message: "Expected a posix_sed_ere syntax tree for ere.",
-    });
-    assert.throws(
-      () => diagnostics({ mode: "toString", source: "p\n", tree }),
-      {
-        name: "TypeError",
-        message: "Unsupported regular expression mode: toString",
-      },
-    );
-    for (const source of ["q\n", ""]) {
-      assert.throws(() => diagnostics({ mode: "bre", source, tree }), {
-        name: "TypeError",
-        message: "The sed source must match the syntax tree.",
-      });
-    }
-  } finally {
-    tree.delete();
-    parser.delete();
-  }
-});
-
 test("returns UTF-16 source offsets without LSP range conversion", async () => {
   const matching = (await diagnosticsFor(":😀\n")).find(
     ({ code }) => code === "nonportable-label",
@@ -64,23 +34,31 @@ test("returns UTF-16 source offsets without LSP range conversion", async () => {
   );
 });
 
-test("defines one display policy for every grammar reason", () => {
+test("defines one diagnostic message and severity for every grammar issue", () => {
+  const outcomes = new Set(
+    Object.values(grammarManifest().languages).flatMap(({ outcomes }) =>
+      Object.keys(outcomes),
+    ),
+  );
   const reasons = new Set(
     Object.values(grammarManifest().languages).flatMap(({ outcomes }) =>
       Object.values(outcomes).flat(),
     ),
   );
   assert.deepEqual(
-    Object.keys(diagnosticPolicies()).sort(),
+    Object.keys(diagnosticMessages()).sort(),
     [...reasons].sort(),
   );
-  for (const policy of Object.values(diagnosticPolicies())) {
-    assert.equal(typeof policy.message, "string");
-    assert.equal(policy.range, "artifact");
+  assert.deepEqual(
+    Object.keys(diagnosticSeverities()).sort(),
+    [...outcomes].sort(),
+  );
+  for (const message of Object.values(diagnosticMessages())) {
+    assert.equal(typeof message, "string");
   }
 });
 
-test("maps POSIX outcome classes to the selected severities", async () => {
+test("maps syntax issue outcomes to the selected severities", async () => {
   const cases = [
     ["/a\\?/p\n", "bre-question-mark-escape", "warning"],
     ["rfile\n", "omitted-file-separator", "warning"],
@@ -116,7 +94,7 @@ test("deduplicates nested native errors without hiding independent recovery", as
     "syntax-error",
   ]);
   assert.deepEqual(codes(await diagnosticsFor("1!/\0", "bre", true)), [
-    "unexpected-command-text",
+    "unknown-function",
     "syntax-error",
   ]);
   assert.deepEqual(codes(await diagnosticsFor("}a}", "bre", true)), [
@@ -220,19 +198,20 @@ test("checks interval values without integer precision loss", async () => {
   );
 });
 
-test("measures the portable regular-expression limit in source bytes", async () => {
+test("reports only encoding-independent regular-expression overflow", async () => {
   for (const [expression, expected] of [
     ["a".repeat(256), false],
     ["a".repeat(257), true],
     ["é".repeat(128), false],
-    ["é".repeat(129), true],
+    ["é".repeat(129), false],
+    ["é".repeat(257), true],
   ]) {
     assert.equal(
       codes(await diagnosticsFor(`/${expression}/p\n`)).includes(
         "long-regular-expression",
       ),
       expected,
-      Buffer.byteLength(expression, "utf8"),
+      expression.length,
     );
   }
 });
@@ -293,6 +272,17 @@ test("checks label portability, length, definitions, and references", async () =
       "duplicate-label",
       "undefined-label",
     ],
+  );
+});
+
+test("reports only encoding-independent label overflow", async () => {
+  assert.equal(
+    codes(await diagnosticsFor(":ééééé\n")).includes("long-label"),
+    false,
+  );
+  assert.equal(
+    codes(await diagnosticsFor(":ééééééééé\n")).includes("long-label"),
+    true,
   );
 });
 
@@ -461,5 +451,38 @@ test("uses possible prior group counts for an empty substitution expression", as
     codes(
       await diagnosticsFor("b target\ns/\\(a\\)/x/\n:target\ns//\\1/\n"),
     ).includes("unmatched-replacement-backreference"),
+  );
+});
+
+test("preserves every possible flow through duplicate label definitions", async () => {
+  const source = [
+    "b target",
+    ":target",
+    "s/\\(a\\)/x/",
+    "b end",
+    ":target",
+    "s/\\(a\\)\\(b\\)/x/",
+    ":end",
+    "s//\\2/",
+    "",
+  ].join("\n");
+  assert.equal(
+    codes(await diagnosticsFor(source)).includes(
+      "unmatched-replacement-backreference",
+    ),
+    true,
+  );
+});
+
+test("handles many duplicate labels and branches without a quadratic graph", {
+  timeout: 3000,
+}, async () => {
+  const count = 2000;
+  const source = `${":target\n".repeat(count)}${"b target\n".repeat(count)}`;
+  assert.equal(
+    codes(await diagnosticsFor(source)).filter(
+      (code) => code === "duplicate-label",
+    ).length,
+    count,
   );
 });

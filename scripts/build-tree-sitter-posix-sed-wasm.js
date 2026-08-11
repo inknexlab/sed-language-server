@@ -11,7 +11,15 @@ import {
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const treeSitterPosixSedRevision = "38b635ec26e6fd403e250b2932706cac15f36311";
+const treeSitterPosixSedRevision = "5a1270d54337c909a8fca6b0dda396d579da79b1";
+const syntaxIssueOutcomeNames = new Set([
+  "implementation_defined_syntax",
+  "implementation_option_syntax",
+  "incomplete_syntax",
+  "nonconforming_syntax",
+  "undefined_syntax",
+  "unspecified_syntax",
+]);
 const languages = [
   {
     mode: "bre",
@@ -42,28 +50,82 @@ function runGit(grammarDirectory, arguments_) {
   return result.stdout.trim();
 }
 
-function issueOutcomes(nodeTypes) {
-  const syntaxIssue = nodeTypes.find(
-    ({ named, type }) => named && type === "syntax_issue",
-  );
-  if (syntaxIssue?.children?.types === undefined) {
-    throw new Error("The grammar does not expose syntax_issue outcomes.");
+function namedNode(nodeTypes, type, languageName) {
+  const matches = nodeTypes.filter((node) => node.named && node.type === type);
+  if (matches.length !== 1) {
+    throw new Error(
+      `${languageName} must expose exactly one named ${type} node type.`,
+    );
+  }
+  return matches[0];
+}
+
+function requiredNamedChildTypes(node, languageName) {
+  const { children } = node;
+  if (
+    children?.required !== true ||
+    children.multiple !== false ||
+    !Array.isArray(children.types) ||
+    children.types.length === 0 ||
+    children.types.some(({ named }) => !named)
+  ) {
+    throw new Error(
+      `${languageName} ${node.type} must require exactly one named child.`,
+    );
+  }
+
+  const types = children.types.map(({ type }) => type);
+  if (new Set(types).size !== types.length) {
+    throw new Error(`${languageName} ${node.type} repeats a child type.`);
+  }
+  return types;
+}
+
+function issueOutcomes(nodeTypes, languageName) {
+  const syntaxIssue = namedNode(nodeTypes, "syntax_issue", languageName);
+  const outcomes = requiredNamedChildTypes(syntaxIssue, languageName).sort();
+  for (const outcome of outcomes) {
+    if (!syntaxIssueOutcomeNames.has(outcome)) {
+      throw new Error(
+        `${languageName} exposes an unknown outcome: ${outcome}.`,
+      );
+    }
+  }
+
+  for (const outcome of syntaxIssueOutcomeNames) {
+    const exposed = nodeTypes.some(
+      ({ named, type }) => named && type === outcome,
+    );
+    if (exposed !== outcomes.includes(outcome)) {
+      throw new Error(
+        `${languageName} ${outcome} must be exposed directly by syntax_issue.`,
+      );
+    }
   }
 
   return Object.fromEntries(
-    syntaxIssue.children.types.map(({ type: outcome }) => {
-      const outcomeNode = nodeTypes.find(
-        ({ named, type }) => named && type === outcome,
-      );
-      if (outcomeNode?.children?.types === undefined) {
-        throw new Error(`The grammar does not expose reasons for ${outcome}.`);
+    outcomes.map((outcome) => {
+      const outcomeNode = namedNode(nodeTypes, outcome, languageName);
+      const reasons = requiredNamedChildTypes(outcomeNode, languageName).sort();
+      for (const reason of reasons) {
+        namedNode(nodeTypes, reason, languageName);
       }
-      return [
-        outcome,
-        outcomeNode.children.types.map(({ type }) => type).sort(),
-      ];
+      return [outcome, reasons];
     }),
   );
+}
+
+function assertOutcomeCoverage(manifestLanguages) {
+  const outcomes = new Set(
+    Object.values(manifestLanguages).flatMap(({ outcomes: definitions }) =>
+      Object.keys(definitions),
+    ),
+  );
+  for (const outcome of syntaxIssueOutcomeNames) {
+    if (!outcomes.has(outcome)) {
+      throw new Error(`The grammar variants do not expose ${outcome}.`);
+    }
+  }
 }
 
 function grammarDefinition(grammarDirectory) {
@@ -83,18 +145,33 @@ function assertLanguageDefinition(definition, language) {
   }
 }
 
-function buildLanguage({
-  cliPath,
-  grammarDirectory,
-  language,
-  vendorDirectory,
-}) {
+function languageArtifacts(grammarDirectory, language) {
   const sourceDirectory = resolve(grammarDirectory, language.directory);
   const parserSource = resolve(sourceDirectory, "src/parser.c");
   if (!existsSync(parserSource)) {
     throw new Error(`Missing generated parser: ${parserSource}`);
   }
+  const nodeTypesPath = resolve(sourceDirectory, "src/node-types.json");
+  if (!existsSync(nodeTypesPath)) {
+    throw new Error(`Missing generated node types: ${nodeTypesPath}`);
+  }
+  const nodeTypes = JSON.parse(readFileSync(nodeTypesPath, "utf8"));
+  return {
+    sourceDirectory,
+    manifest: {
+      language: language.languageName,
+      wasm: language.wasmName,
+      outcomes: issueOutcomes(nodeTypes, language.languageName),
+    },
+  };
+}
 
+function buildLanguage({
+  cliPath,
+  language,
+  sourceDirectory,
+  vendorDirectory,
+}) {
   const outputPath = resolve(vendorDirectory, language.wasmName);
   const result = spawnSync(
     process.execPath,
@@ -107,15 +184,6 @@ function buildLanguage({
     });
   }
   chmodSync(outputPath, 0o644);
-
-  const nodeTypes = JSON.parse(
-    readFileSync(resolve(sourceDirectory, "src/node-types.json"), "utf8"),
-  );
-  return {
-    language: language.languageName,
-    wasm: language.wasmName,
-    outcomes: issueOutcomes(nodeTypes),
-  };
 }
 
 function main() {
@@ -162,12 +230,20 @@ function main() {
   mkdirSync(vendorDirectory, { recursive: true });
   const definition = grammarDefinition(grammarDirectory);
   const manifestLanguages = {};
+  const builds = [];
   for (const language of languages) {
     assertLanguageDefinition(definition, language);
-    manifestLanguages[language.mode] = buildLanguage({
+    const artifacts = languageArtifacts(grammarDirectory, language);
+    manifestLanguages[language.mode] = artifacts.manifest;
+    builds.push({ language, sourceDirectory: artifacts.sourceDirectory });
+  }
+  assertOutcomeCoverage(manifestLanguages);
+
+  for (const { language, sourceDirectory } of builds) {
+    buildLanguage({
       cliPath,
-      grammarDirectory,
       language,
+      sourceDirectory,
       vendorDirectory,
     });
   }

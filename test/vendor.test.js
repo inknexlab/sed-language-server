@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { SedParser } from "../src/analysis/index.js";
+import { SedParser } from "../src/analysis/parser.js";
 
 const variantIds = ["bre", "ere"];
 let parsers = {};
@@ -236,22 +236,13 @@ test("substitution flags stay ordered before a terminal write flag", () => {
   }
 });
 
-test("positive substitution occurrences retain leading zeros", () => {
+test("substitution occurrences retain every digit spelling", () => {
   for (const variant of variantIds) {
-    const positive = parse(variant, "s/a/b/001\n");
-    assertPortable(positive);
-    assert.equal(only(positive, "occurrence_flag").text, "001");
-
-    const zero = parse(variant, "s/a/b/000\n");
-    assertNoNativeError(zero);
-    assert.deepEqual(
-      issueRecords(zero).map(({ outcome, reason, text }) => [
-        outcome,
-        reason,
-        text,
-      ]),
-      [["nonconforming_syntax", "zero_substitution_occurrence", "000"]],
-    );
+    for (const spelling of ["001", "000"]) {
+      const tree = parse(variant, `s/a/b/${spelling}\n`);
+      assertPortable(tree);
+      assert.equal(only(tree, "occurrence_flag").text, spelling);
+    }
   }
 });
 
@@ -398,16 +389,14 @@ test("BRE interval closes remain visible outside interval recovery", () => {
   assert.equal(only(quotedEreClose, "quoted_character").text, "\\}");
 });
 
-test("BRE duplication recovery preserves conditional tokens and intervals", () => {
+test("BRE extension escapes remain neutral beside duplication", () => {
   const adjacent = parse("bre", "/a*\\+b/p\n");
   assertNoNativeError(adjacent);
   assert.deepEqual(
     issueRecords(adjacent).map(({ outcome, reason }) => [outcome, reason]),
-    [
-      ["undefined_syntax", "adjacent_duplication_symbol"],
-      ["implementation_defined_syntax", "bre_plus_escape"],
-    ],
+    [["implementation_defined_syntax", "bre_plus_escape"]],
   );
+  assert.equal(only(adjacent, "bre_extension_escape").text, "\\+");
   assert.equal(only(adjacent, "back_plus").text, "\\+");
 
   const adjacentInterval = parse("bre", "/a*\\{2\\}/p\n");
@@ -736,7 +725,9 @@ test("syntax issues have stable outcome and reason layers", () => {
     ],
     ["bre", "a\\\ntext\\", "unspecified_syntax", "unspecified_text_escape"],
     ["bre", "1,2q\n", "nonconforming_syntax", "excess_addresses"],
-    ["bre", "r\n", "incomplete_syntax", "missing_rfile"],
+    ["bre", "r", "incomplete_syntax", "missing_rfile"],
+    ["bre", "r\n", "nonconforming_syntax", "missing_rfile"],
+    ["bre", "s/a/b/w file;p\n", "undefined_syntax", "command_after_write_flag"],
   ];
 
   for (const [variant, source, outcome, reason] of cases) {
@@ -777,9 +768,9 @@ test("known recovery shapes preserve the following command", () => {
     ["bre", "/a\\{1,2,3\\}/p\np\n", "malformed_interval"],
     ["bre", "\\2a\\{12p\n", "malformed_interval"],
     ["ere", "/[a-m-o]/p\np\n", "shared_range_endpoint"],
-    ["ere", "/(\np\n", "missing_subexpression"],
+    ["ere", "/(\np\n", "unclosed_subexpression"],
     ["ere", "/(a\np\n", "unclosed_subexpression"],
-    ["ere", "/a\\\np\n", "incomplete_regular_expression_escape"],
+    ["ere", "/a\\\np\n", "forbidden_regular_expression_newline"],
     ["ere", "\\2a{12p\n", "malformed_interval"],
     ["bre", "y/a/b\\\np\n", "undefined_translation_escape"],
   ];
@@ -914,21 +905,13 @@ test("address separators expose concrete comma tokens independently from recover
   }
 });
 
-test("POSIX ambiguity is exposed instead of selecting an implementation", () => {
-  for (const [source, positionIssue] of [
-    ["/\\?/p\n", "leading_duplication_symbol"],
-    ["/a*\\?/p\n", "adjacent_duplication_symbol"],
-  ]) {
+test("POSIX ambiguity is exposed without selecting an implementation", () => {
+  for (const source of ["/\\?/p\n", "/a*\\?/p\n"]) {
     const tree = parse("bre", source);
     assertNoNativeError(tree);
     assert.deepEqual(
       issueRecords(tree),
       [
-        {
-          outcome: "undefined_syntax",
-          reason: positionIssue,
-          text: "",
-        },
         {
           outcome: "implementation_defined_syntax",
           reason: "bre_question_mark_escape",
@@ -937,16 +920,13 @@ test("POSIX ambiguity is exposed instead of selecting an implementation", () => 
       ],
       tree.rootNode.toString(),
     );
+    assert.equal(only(tree, "bre_extension_escape").text, "\\?");
     assert.equal(only(tree, "back_qm").text, "\\?");
   }
 
   const breAlternation = parse("bre", "/a\\|b/p\n");
-  assert.equal(
-    only(breAlternation, "context_address")
-      .childForFieldName("expression")
-      ?.childForFieldName("operator")?.type,
-    "bre_alternation_operator",
-  );
+  assert.equal(nodes(breAlternation, "bre_alternation_operator").length, 0);
+  assert.equal(only(breAlternation, "bre_extension_escape").text, "\\|");
   assert.equal(only(breAlternation, "back_bar").text, "\\|");
 
   const duplicationAfterBreAlternation = parse("bre", "/a\\|*/p\n");
@@ -959,10 +939,10 @@ test("POSIX ambiguity is exposed instead of selecting an implementation", () => 
     [["implementation_defined_syntax", "bre_vertical_line_escape"]],
   );
   assert.deepEqual(
-    nodes(duplicationAfterBreAlternation, "ordinary_character").map(
+    nodes(duplicationAfterBreAlternation, "zero_or_more_operator").map(
       ({ text }) => text,
     ),
-    ["a", "*"],
+    ["*"],
   );
 
   for (const variant of variantIds) {

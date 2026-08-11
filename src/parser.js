@@ -1,23 +1,8 @@
+import {
+  regularExpressionModes,
+  SedParser,
+} from "@inknexlab/sed-language-server/analysis";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { regularExpressionModes, SedParser } from "./analysis/index.js";
-
-function point({ character, line }) {
-  return { row: line, column: character };
-}
-
-function endPosition(start, text) {
-  const lines = text.split("\n");
-  if (lines.length === 1) {
-    return {
-      line: start.line,
-      character: start.character + text.length,
-    };
-  }
-  return {
-    line: start.line + lines.length - 1,
-    character: lines.at(-1).length,
-  };
-}
 
 function editForChange(document, change) {
   const oldText = document.getText();
@@ -28,10 +13,7 @@ function editForChange(document, change) {
   return {
     startIndex,
     oldEndIndex,
-    newEndIndex: startIndex + change.text.length,
-    startPosition: point(start),
-    oldEndPosition: point(oldEnd),
-    newEndPosition: point(endPosition(start, change.text)),
+    text: change.text,
   };
 }
 
@@ -61,10 +43,12 @@ export class SyntaxStore {
 
   #documents = new Map();
   #disposed = false;
+  #mode;
+  #parser;
 
   constructor(mode, parser) {
-    this.mode = mode;
-    this.parser = parser;
+    this.#mode = mode;
+    this.#parser = parser;
   }
 
   #assertAvailable() {
@@ -73,21 +57,17 @@ export class SyntaxStore {
     }
   }
 
-  #parse(source, oldTree) {
-    return this.parser.parse(source, oldTree);
-  }
-
   #replace(uri, document, tree) {
     const previous = this.#documents.get(uri);
     this.#documents.set(uri, { document, tree });
     previous?.tree.delete();
-    return snapshotFor({ document, tree }, this.mode);
+    return snapshotFor({ document, tree }, this.#mode);
   }
 
   open(document) {
     this.#assertAvailable();
     const ownedDocument = copyDocument(document);
-    const tree = this.#parse(ownedDocument.getText());
+    const tree = this.#parser.parse(ownedDocument.getText());
     return this.#replace(document.uri, ownedDocument, tree);
   }
 
@@ -99,24 +79,17 @@ export class SyntaxStore {
     }
 
     let nextDocument = copyDocument(state.document);
-    const editedTree = state.tree.copy();
-    try {
-      for (const change of changes) {
-        const edit = editForChange(nextDocument, change);
-        nextDocument = TextDocument.update(nextDocument, [change], version);
-        editedTree.edit(edit);
-      }
-
-      let nextTree;
-      try {
-        nextTree = this.#parse(nextDocument.getText(), editedTree);
-      } catch {
-        nextTree = this.#parse(nextDocument.getText());
-      }
-      return this.#replace(uri, nextDocument, nextTree);
-    } finally {
-      editedTree.delete();
+    const edits = [];
+    for (const change of changes) {
+      edits.push(editForChange(nextDocument, change));
+      nextDocument = TextDocument.update(nextDocument, [change], version);
     }
+    const nextTree = this.#parser.reparse(
+      nextDocument.getText(),
+      state.tree,
+      edits,
+    );
+    return this.#replace(uri, nextDocument, nextTree);
   }
 
   snapshot(uri, version) {
@@ -128,7 +101,7 @@ export class SyntaxStore {
     ) {
       return undefined;
     }
-    return snapshotFor(state, this.mode);
+    return snapshotFor(state, this.#mode);
   }
 
   close(uri) {
@@ -148,7 +121,7 @@ export class SyntaxStore {
       tree.delete();
     }
     this.#documents.clear();
-    this.parser.delete();
+    this.#parser.delete();
     this.#disposed = true;
   }
 }

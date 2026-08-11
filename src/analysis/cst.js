@@ -27,14 +27,15 @@ const functionTypes = new Set([
   "write_function",
 ]);
 
-function firstNamedChild(node) {
-  for (let index = 0; index < node.namedChildCount; index += 1) {
-    const child = node.namedChild(index);
-    if (child !== null) {
-      return child;
-    }
+function requiredNamedChild(node) {
+  if (node.namedChildCount !== 1) {
+    throw new Error(`${node.type} must have exactly one named child.`);
   }
-  return undefined;
+  const child = node.namedChild(0);
+  if (child === null) {
+    throw new Error(`${node.type} does not expose its required named child.`);
+  }
+  return child;
 }
 
 export function descendants(root, type) {
@@ -101,22 +102,19 @@ export function structuredIssues(root) {
   while (stack.length > 0) {
     const { node, parent } = stack.pop();
     if (node.type === "syntax_issue") {
-      const outcomeNode = firstNamedChild(node);
-      const reasonNode =
-        outcomeNode === undefined ? undefined : firstNamedChild(outcomeNode);
-      if (outcomeNode !== undefined && reasonNode !== undefined) {
-        findings.push(
-          Object.freeze({
-            kind: "structured",
-            node,
-            parent,
-            outcomeNode,
-            reasonNode,
-            outcome: outcomeNode.type,
-            reason: reasonNode.type,
-          }),
-        );
-      }
+      const outcomeNode = requiredNamedChild(node);
+      const reasonNode = requiredNamedChild(outcomeNode);
+      findings.push(
+        Object.freeze({
+          kind: "structured",
+          node,
+          parent,
+          outcomeNode,
+          reasonNode,
+          outcome: outcomeNode.type,
+          reason: reasonNode.type,
+        }),
+      );
     }
     const children = node.children;
     for (let index = children.length - 1; index >= 0; index -= 1) {

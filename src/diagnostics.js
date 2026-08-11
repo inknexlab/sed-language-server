@@ -1,5 +1,5 @@
+import { diagnostics as analyze } from "@inknexlab/sed-language-server/analysis";
 import { DiagnosticSeverity } from "vscode-languageserver";
-import { diagnostics as analyze } from "./analysis/index.js";
 
 const severityByName = Object.freeze({
   error: DiagnosticSeverity.Error,

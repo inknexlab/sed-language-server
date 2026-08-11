@@ -48,8 +48,8 @@ test("orders diagnostics after CRLF offsets are projected to LSP positions", asy
   assert.deepEqual(
     values.map(({ code, range }) => ({ code, range })),
     [
-      "incomplete-regular-expression",
       "missing-function",
+      "unterminated-regular-expression",
       "omitted-address",
     ].map((code) => ({
       code,

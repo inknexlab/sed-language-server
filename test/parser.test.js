@@ -231,6 +231,42 @@ test("edits from recovery to canonical syntax match full parses", async () => {
   }
 });
 
+test("recovery CSTs converge from distinct edit histories", async () => {
+  const cases = [
+    {
+      source: "/[",
+      changes: (document) => [changeForOffsets(document, 2, 2, "a")],
+    },
+    {
+      source: "/[b",
+      changes: (document) => [replacementChange(document, "b", "a")],
+    },
+    {
+      source: "1!x\np\n",
+      changes: (document) => [replacementChange(document, "x", "/")],
+    },
+    {
+      source: "1!$\np\n",
+      changes: (document) => [replacementChange(document, "$", "/")],
+    },
+  ];
+
+  for (const { source, changes } of cases) {
+    await assertIncrementalMatchesFull({
+      mode: "bre",
+      source,
+      changes,
+      verify: ({ tree }) => {
+        assert.equal(tree.rootNode.hasError, false, source);
+        assert.ok(
+          tree.rootNode.descendantsOfType("syntax_issue").length > 0,
+          source,
+        );
+      },
+    });
+  }
+});
+
 test("script-leading #n suppression follows incremental edits", async () => {
   for (const mode of ["bre", "ere"]) {
     const incrementalStore = await SyntaxStore.create(mode);

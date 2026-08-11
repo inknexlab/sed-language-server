@@ -1,4 +1,3 @@
-import { languageDefinition } from "./parser.js";
 import {
   descendants,
   functionForCommand,
@@ -7,7 +6,8 @@ import {
   rangeForNode,
   structuredIssues,
   textForNode,
-} from "./syntax.js";
+} from "./cst.js";
+import { assertSnapshot } from "./snapshot.js";
 
 const portableDuplicationLimit = 255n;
 const portableRegularExpressionLength = 256;
@@ -21,22 +21,8 @@ const lineKinds = Object.freeze({
 });
 const lineKindCount = Object.keys(lineKinds).length;
 
-function assertSnapshot(snapshot) {
-  if (snapshot === null || typeof snapshot !== "object") {
-    throw new TypeError("The sed syntax snapshot must be an object.");
-  }
-  if (typeof snapshot.source !== "string") {
-    throw new TypeError("The sed source must be a string.");
-  }
-  const definition = languageDefinition(snapshot.mode);
-  if (snapshot.tree?.language?.name !== definition.language) {
-    throw new TypeError(
-      `Expected a ${definition.language} syntax tree for ${snapshot.mode}.`,
-    );
-  }
-  if (snapshot.tree.rootNode.text !== snapshot.source) {
-    throw new TypeError("The sed source must match the syntax tree.");
-  }
+function minimumEncodedByteLength(value) {
+  return Array.from(value).length;
 }
 
 const outcomeSeverities = Object.freeze({
@@ -48,261 +34,106 @@ const outcomeSeverities = Object.freeze({
   unspecified_syntax: "warning",
 });
 
-const reasonPolicies = Object.freeze({
-  additional_address: {
-    message: "This command has an additional address.",
-    range: "artifact",
-  },
-  adjacent_duplication_symbol: {
-    message:
-      "Adjacent regular-expression duplication symbols have undefined behavior.",
-    range: "artifact",
-  },
-  ambiguous_bracket_expression: {
-    message: "This bracket expression has an unspecified interpretation.",
-    range: "artifact",
-  },
-  blanks_after_negation: {
-    message: "Blanks after '!' have unspecified behavior.",
-    range: "artifact",
-  },
-  blanks_around_address_separator: {
-    message: "Blanks are not permitted around an address separator.",
-    range: "artifact",
-  },
-  bre_plus_escape: {
-    message: "The meaning of '\\+' in a POSIX BRE is implementation-defined.",
-    range: "artifact",
-  },
-  bre_question_mark_escape: {
-    message: "The meaning of '\\?' in a POSIX BRE is implementation-defined.",
-    range: "artifact",
-  },
-  bre_subexpression_left_anchor: {
-    message:
-      "A leading '^' in a BRE subexpression is an implementation option.",
-    range: "artifact",
-  },
-  bre_subexpression_right_anchor: {
-    message:
-      "A trailing '$' in a BRE subexpression is an implementation option.",
-    range: "artifact",
-  },
-  bre_vertical_line_escape: {
-    message: "The meaning of '\\|' in a POSIX BRE is implementation-defined.",
-    range: "artifact",
-  },
-  character_class_range_end: {
-    message: "A character class cannot be the ending point of a range.",
-    range: "artifact",
-  },
-  character_class_range_start: {
-    message: "A character class cannot be the starting point of a range.",
-    range: "artifact",
-  },
-  duplicate_negation: {
-    message: "An editing command can contain at most one '!'.",
-    range: "artifact",
-  },
-  empty_alternative: {
-    message: "An empty regular-expression alternative has undefined behavior.",
-    range: "artifact",
-  },
-  empty_subexpression: {
-    message:
-      "An empty regular-expression subexpression has undefined behavior.",
-    range: "artifact",
-  },
-  equivalence_class_range_end: {
-    message:
-      "An equivalence class as a range endpoint has unspecified behavior.",
-    range: "artifact",
-  },
-  equivalence_class_range_start: {
-    message:
-      "An equivalence class as a range endpoint has unspecified behavior.",
-    range: "artifact",
-  },
-  excess_addresses: {
-    message: "This function accepts fewer addresses.",
-    range: "artifact",
-  },
-  forbidden_command_separator: {
-    message: "This editing command cannot be followed by a semicolon.",
-    range: "artifact",
-  },
-  incomplete_regular_expression: {
-    message: "The regular expression is incomplete.",
-    range: "artifact",
-  },
-  incomplete_regular_expression_escape: {
-    message: "The regular-expression escape is incomplete.",
-    range: "artifact",
-  },
-  incomplete_replacement: {
-    message: "The replacement is incomplete.",
-    range: "artifact",
-  },
-  incomplete_replacement_escape: {
-    message: "The replacement escape is incomplete.",
-    range: "artifact",
-  },
-  incomplete_translation: {
-    message: "The translation command is incomplete.",
-    range: "artifact",
-  },
-  incomplete_translation_escape: {
-    message: "The translation escape is incomplete.",
-    range: "artifact",
-  },
-  invalid_address: {
-    message: "This is not a valid POSIX sed address.",
-    range: "artifact",
-  },
-  invalid_delimiter: {
-    message: "A backslash or newline cannot delimit this argument.",
-    range: "artifact",
-  },
-  invalid_substitution_flag: {
-    message: "This is not a POSIX substitution flag.",
-    range: "artifact",
-  },
-  leading_duplication_symbol: {
-    message:
-      "A leading regular-expression duplication symbol has undefined behavior.",
-    range: "artifact",
-  },
-  malformed_bracket_term: {
-    message: "This bracket-expression term is malformed.",
-    range: "artifact",
-  },
-  malformed_interval: {
-    message: "This regular-expression interval is malformed.",
-    range: "artifact",
-  },
-  missing_address_separator: {
-    message: "A comma is required between these addresses.",
-    range: "artifact",
-  },
-  missing_bracket_list: {
-    message: "The bracket expression has no bracket list.",
-    range: "artifact",
-  },
-  missing_closing_brace: {
-    message: "The command block needs a closing brace.",
-    range: "artifact",
-  },
-  missing_command_separator: {
-    message: "A newline or permitted semicolon is required between commands.",
-    range: "artifact",
-  },
-  missing_function: {
-    message: "The editing command needs a function.",
-    range: "artifact",
-  },
-  missing_label: {
-    message: "The label command needs a label.",
-    range: "artifact",
-  },
-  missing_opening_delimiter: {
-    message: "The command needs an opening delimiter.",
-    range: "artifact",
-  },
-  missing_rfile: {
-    message: "The read command needs an rfile.",
-    range: "artifact",
-  },
-  missing_subexpression: {
-    message: "The regular-expression subexpression is incomplete.",
-    range: "artifact",
-  },
-  missing_text: {
-    message: "The command needs text.",
-    range: "artifact",
-  },
-  missing_text_introducer: {
-    message: "The text argument must be introduced by a backslash and newline.",
-    range: "artifact",
-  },
-  missing_wfile: {
-    message: "The write command or flag needs a wfile.",
-    range: "artifact",
-  },
-  omitted_address: {
-    message: "Omitting an address around a comma has undefined behavior.",
-    range: "artifact",
-  },
-  omitted_file_separator: {
-    message:
-      "Accepting a file argument without separating blanks is an implementation option.",
-    range: "artifact",
-  },
-  ordinary_character_escape: {
-    message:
-      "Escaping this ordinary regular-expression character has undefined behavior.",
-    range: "artifact",
-  },
-  replacement_ampersand_delimiter_escape: {
-    message:
-      "Escaping an ampersand delimiter in the replacement has unspecified behavior.",
-    range: "artifact",
-  },
-  shared_range_endpoint: {
-    message:
-      "Sharing a character between bracket-expression ranges has undefined behavior.",
-    range: "artifact",
-  },
-  special_delimiter_escape: {
-    message:
-      "Escaping this special regular-expression delimiter has unspecified behavior.",
-    range: "artifact",
-  },
-  unclosed_bracket_expression: {
-    message: "The bracket expression is not closed.",
-    range: "artifact",
-  },
-  unclosed_subexpression: {
-    message: "The regular-expression subexpression is not closed.",
-    range: "artifact",
-  },
-  undefined_translation_escape: {
-    message: "This translation-string escape has undefined behavior.",
-    range: "artifact",
-  },
-  unexpected_command_text: {
-    message: "Unexpected text follows this editing command.",
-    range: "artifact",
-  },
-  unknown_function: {
-    message: "This is not a POSIX sed function.",
-    range: "artifact",
-  },
-  unmatched_closing_brace: {
-    message: "This closing brace has no matching command block.",
-    range: "artifact",
-  },
-  unmatched_interval_close: {
-    message:
-      "This BRE interval closing sequence has no matching opening sequence.",
-    range: "artifact",
-  },
-  unmatched_subexpression_close: {
-    message:
-      "This BRE subexpression closing sequence has no matching opening sequence.",
-    range: "artifact",
-  },
-  unspecified_replacement_escape: {
-    message: "This replacement escape has unspecified behavior.",
-    range: "artifact",
-  },
-  unspecified_text_escape: {
-    message: "This text escape has unspecified behavior.",
-    range: "artifact",
-  },
-  zero_substitution_occurrence: {
-    message: "A substitution occurrence must be greater than zero.",
-    range: "artifact",
-  },
+const reasonMessages = Object.freeze({
+  additional_address: "This command has an additional address.",
+  adjacent_duplication_symbol:
+    "Adjacent regular-expression duplication symbols have undefined behavior.",
+  ambiguous_bracket_expression:
+    "This bracket expression has an unspecified interpretation.",
+  blanks_after_negation: "Blanks after '!' have unspecified behavior.",
+  blanks_around_address_separator:
+    "Blanks are not permitted around an address separator.",
+  bre_plus_escape:
+    "The meaning of '\\+' in a POSIX BRE is implementation-defined.",
+  bre_question_mark_escape:
+    "The meaning of '\\?' in a POSIX BRE is implementation-defined.",
+  bre_subexpression_left_anchor:
+    "A leading '^' in a BRE subexpression is an implementation option.",
+  bre_subexpression_right_anchor:
+    "A trailing '$' in a BRE subexpression is an implementation option.",
+  bre_vertical_line_escape:
+    "The meaning of '\\|' in a POSIX BRE is implementation-defined.",
+  character_class_range_end:
+    "A character class cannot be the ending point of a range.",
+  character_class_range_start:
+    "A character class cannot be the starting point of a range.",
+  command_after_write_flag:
+    "A command following the w substitution flag has undefined behavior.",
+  duplicate_negation: "An editing command can contain at most one '!'.",
+  empty_alternative:
+    "An empty regular-expression alternative has undefined behavior.",
+  empty_subexpression:
+    "An empty regular-expression subexpression has undefined behavior.",
+  equivalence_class_range_end:
+    "An equivalence class as a range endpoint has unspecified behavior.",
+  equivalence_class_range_start:
+    "An equivalence class as a range endpoint has unspecified behavior.",
+  excess_addresses: "This function accepts fewer addresses.",
+  forbidden_command_separator:
+    "This editing command cannot be followed by a semicolon.",
+  forbidden_regular_expression_newline:
+    "A physical newline cannot be escaped in a regular expression.",
+  incomplete_alternative: "The regular-expression alternative is incomplete.",
+  incomplete_bracket_term: "The bracket-expression term is incomplete.",
+  incomplete_interval: "The regular-expression interval is incomplete.",
+  incomplete_regular_expression: "The regular expression is incomplete.",
+  incomplete_regular_expression_escape:
+    "The regular-expression escape is incomplete.",
+  incomplete_replacement: "The replacement is incomplete.",
+  incomplete_replacement_escape: "The replacement escape is incomplete.",
+  incomplete_translation: "The translation command is incomplete.",
+  incomplete_translation_escape: "The translation escape is incomplete.",
+  invalid_delimiter: "A backslash or newline cannot delimit this argument.",
+  invalid_substitution_flag: "This is not a POSIX substitution flag.",
+  leading_duplication_symbol:
+    "A leading regular-expression duplication symbol has undefined behavior.",
+  malformed_bracket_term: "This bracket-expression term is malformed.",
+  malformed_interval: "This regular-expression interval is malformed.",
+  missing_address_separator: "A comma is required between these addresses.",
+  missing_bracket_list: "The bracket expression has no bracket list.",
+  missing_closing_brace: "The command block needs a closing brace.",
+  missing_command_separator:
+    "A newline or permitted semicolon is required between commands.",
+  missing_function: "The editing command needs a function.",
+  missing_label: "The label command needs a label.",
+  missing_opening_delimiter: "The command needs an opening delimiter.",
+  missing_rfile: "The read command needs an rfile.",
+  missing_subexpression: "The regular-expression subexpression is incomplete.",
+  missing_text: "The command needs text.",
+  missing_text_introducer:
+    "The text argument must be introduced by a backslash and newline.",
+  missing_wfile: "The write command or flag needs a wfile.",
+  omitted_address: "Omitting an address around a comma has undefined behavior.",
+  omitted_file_separator:
+    "Accepting a file argument without separating blanks is an implementation option.",
+  ordinary_character_escape:
+    "Escaping this ordinary regular-expression character has undefined behavior.",
+  replacement_ampersand_delimiter_escape:
+    "Escaping an ampersand delimiter in the replacement has unspecified behavior.",
+  shared_range_endpoint:
+    "Sharing a character between bracket-expression ranges has undefined behavior.",
+  special_delimiter_escape:
+    "Escaping this special regular-expression delimiter has unspecified behavior.",
+  unclosed_bracket_expression: "The bracket expression is not closed.",
+  unclosed_subexpression: "The regular-expression subexpression is not closed.",
+  undefined_translation_escape:
+    "This translation-string escape has undefined behavior.",
+  unexpected_command_text: "Unexpected text follows this editing command.",
+  unknown_function: "This is not a POSIX sed function.",
+  unmatched_closing_brace: "This closing brace has no matching command block.",
+  unmatched_interval_close:
+    "This BRE interval closing sequence has no matching opening sequence.",
+  unmatched_subexpression_close:
+    "This BRE subexpression closing sequence has no matching opening sequence.",
+  unspecified_replacement_escape:
+    "This replacement escape has unspecified behavior.",
+  unspecified_text_escape: "This text escape has unspecified behavior.",
+  unterminated_regular_expression:
+    "The regular expression is not terminated before the physical line ending.",
+  unterminated_replacement:
+    "The replacement is not terminated before the physical line ending.",
+  unterminated_translation:
+    "The translation command is not terminated before the physical line ending.",
 });
 
 function codeFor(reason) {
@@ -337,10 +168,7 @@ function sourceLeafNear(node, index) {
   return current;
 }
 
-function rangeNode(issue, policy) {
-  if (policy !== "artifact") {
-    throw new Error(`Unsupported diagnostic range policy: ${policy}`);
-  }
+function rangeNode(issue) {
   if (issue.reasonNode.endIndex > issue.reasonNode.startIndex) {
     return issue.reasonNode;
   }
@@ -403,9 +231,9 @@ function diagnosticAt(startIndex, endIndex, code, message) {
 
 function structuredDiagnostics(root) {
   return structuredIssues(root).map((issue) => {
-    const policy = reasonPolicies[issue.reason];
-    if (policy === undefined) {
-      throw new Error(`No diagnostic policy for ${issue.reason}.`);
+    const message = reasonMessages[issue.reason];
+    if (message === undefined) {
+      throw new Error(`No diagnostic message for ${issue.reason}.`);
     }
     const severity = outcomeSeverities[issue.outcome];
     if (severity === undefined) {
@@ -413,10 +241,10 @@ function structuredDiagnostics(root) {
     }
     return {
       diagnostic: diagnostic(
-        rangeForNode(rangeNode(issue, policy.range)),
+        rangeForNode(rangeNode(issue)),
         severity,
         codeFor(issue.reason),
-        policy.message,
+        message,
       ),
       issue,
     };
@@ -685,7 +513,7 @@ function regularExpressionLengthDiagnostics(snapshot) {
     const expression = container.childForFieldName("expression");
     if (
       expression !== null &&
-      Buffer.byteLength(textForNode(source, expression), "utf8") >
+      minimumEncodedByteLength(textForNode(source, expression)) >
         portableRegularExpressionLength
     ) {
       result.push(
@@ -845,7 +673,7 @@ function labelDiagnostics(symbols) {
         ),
       );
     }
-    if (Buffer.byteLength(symbol.name, "utf8") > 8) {
+    if (minimumEncodedByteLength(symbol.name) > 8) {
       result.push(
         diagnosticForNode(
           symbol.node,
@@ -912,14 +740,18 @@ function wfileDiagnostics(snapshot) {
 
 function createControlFlow(source, root, symbols) {
   const commands = descendants(root, "editing_command");
-  const units = commands.map((command, id) => ({
+  const commandUnits = commands.map((command, id) => ({
     id,
+    kind: "command",
     command,
     functionNode: functionForCommand(command),
     fallthrough: cycleRestart,
     edges: [],
   }));
-  const unitByCommand = new Map(units.map((unit) => [unit.command.id, unit]));
+  const units = [...commandUnits];
+  const unitByCommand = new Map(
+    commandUnits.map((unit) => [unit.command.id, unit]),
+  );
 
   function wireLists(rootList, continuation) {
     const rootCommands = directCommands(rootList);
@@ -1001,7 +833,29 @@ function createControlFlow(source, root, symbols) {
     };
   }
 
-  for (const unit of units) {
+  const labelDestinations = new Map();
+  function labelDestination(name) {
+    const targets = labels.get(name);
+    if (targets === undefined) {
+      return cycleRestart;
+    }
+    if (targets.length === 1) {
+      return targets[0];
+    }
+    let destination = labelDestinations.get(name);
+    if (destination === undefined) {
+      destination = units.length;
+      units.push({
+        id: destination,
+        kind: "dispatch",
+        edges: targets.map((target) => edge(target, "dispatch")),
+      });
+      labelDestinations.set(name, destination);
+    }
+    return destination;
+  }
+
+  for (const unit of commandUnits) {
     const selection =
       unit.command.childForFieldName("addresses") !== null
         ? "optional"
@@ -1022,16 +876,14 @@ function createControlFlow(source, root, symbols) {
     }
     if (type === "branch_function" || type === "test_function") {
       const label = unit.functionNode.childForFieldName("label");
-      const targets =
+      const target =
         label === null
-          ? [cycleRestart]
-          : (labels.get(textForNode(source, label)) ?? [cycleRestart]);
+          ? cycleRestart
+          : labelDestination(textForNode(source, label));
       if (canApply) {
-        for (const target of targets) {
-          unit.edges.push(
-            edge(target, type === "test_function" ? "test-branch" : "applied"),
-          );
-        }
+        unit.edges.push(
+          edge(target, type === "test_function" ? "test-branch" : "applied"),
+        );
       }
       if (canApply && type === "test_function") {
         unit.edges.push(edge(unit.fallthrough, "test-fallthrough"));
@@ -1320,11 +1172,35 @@ function regexFlowDiagnostics(snapshot, symbols) {
     reported.set(key, value);
   };
 
+  function propagate(edge, outgoing) {
+    if (edge.target === undefined) {
+      return;
+    }
+    const states = edge.advancesInput
+      ? new Set([...outgoing].flatMap(nextInputStates))
+      : outgoing;
+    const destination = incoming[edge.target];
+    const previousSize = destination.size;
+    for (const state of states) {
+      destination.add(state);
+    }
+    if (destination.size !== previousSize && !queued.has(edge.target)) {
+      queue.push(edge.target);
+      queued.add(edge.target);
+    }
+  }
+
   while (queueIndex < queue.length) {
     const id = queue[queueIndex];
     queueIndex += 1;
     queued.delete(id);
     const unit = units[id];
+    if (unit.kind === "dispatch") {
+      for (const edge of unit.edges) {
+        propagate(edge, incoming[id]);
+      }
+      continue;
+    }
     const commandInputs = commandInputFlows(
       snapshot,
       unit.command,
@@ -1342,9 +1218,6 @@ function regexFlowDiagnostics(snapshot, symbols) {
           )
         : new Set(commandInputs.applied);
     for (const edge of unit.edges) {
-      if (edge.target === undefined) {
-        continue;
-      }
       let outgoing;
       if (edge.route === "skipped") {
         outgoing = commandInputs.skipped;
@@ -1363,18 +1236,7 @@ function regexFlowDiagnostics(snapshot, symbols) {
       } else {
         outgoing = applied;
       }
-      if (edge.advancesInput) {
-        outgoing = new Set([...outgoing].flatMap(nextInputStates));
-      }
-      const destination = incoming[edge.target];
-      const previousSize = destination.size;
-      for (const state of outgoing) {
-        destination.add(state);
-      }
-      if (destination.size !== previousSize && !queued.has(edge.target)) {
-        queue.push(edge.target);
-        queued.add(edge.target);
-      }
+      propagate(edge, outgoing);
     }
   }
   return [...reported.values()];
@@ -1395,8 +1257,12 @@ function semanticDiagnostics(snapshot) {
   ];
 }
 
-export function diagnosticPolicies() {
-  return reasonPolicies;
+export function diagnosticMessages() {
+  return reasonMessages;
+}
+
+export function diagnosticSeverities() {
+  return outcomeSeverities;
 }
 
 function syntaxDiagnosticsForValidSnapshot(snapshot) {

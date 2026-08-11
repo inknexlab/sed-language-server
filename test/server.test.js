@@ -87,6 +87,10 @@ async function stopServer(server) {
   server.connection.dispose();
 }
 
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 test("serves the complete document lifecycle over default stdio", async (t) => {
   const server = startServer();
   t.after(async () => stopServer(server));
@@ -102,18 +106,40 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
       hover: { contentFormat: ["markdown", "plaintext"] },
     },
   );
-  assert.equal(initialized.capabilities.positionEncoding, "utf-16");
-  assert.deepEqual(initialized.capabilities.textDocumentSync, {
-    openClose: true,
-    change: 2,
+  assert.deepEqual(initialized.capabilities, {
+    positionEncoding: "utf-16",
+    textDocumentSync: {
+      openClose: true,
+      change: 2,
+    },
+    completionProvider: {},
+    definitionProvider: true,
+    referencesProvider: true,
+    hoverProvider: true,
+    documentFormattingProvider: true,
   });
-  assert.deepEqual(initialized.capabilities.completionProvider, {});
-  assert.equal(initialized.capabilities.hoverProvider, true);
 
   assert.deepEqual(
     await server.connection.sendRequest("textDocument/completion", {
       textDocument: { uri: "file:///unopened.sed" },
       position: { line: 0, character: 0 },
+    }),
+    [],
+  );
+
+  assert.deepEqual(
+    await server.connection.sendRequest("textDocument/definition", {
+      textDocument: { uri: "file:///unopened.sed" },
+      position: { line: 0, character: 0 },
+    }),
+    [],
+  );
+
+  assert.deepEqual(
+    await server.connection.sendRequest("textDocument/references", {
+      textDocument: { uri: "file:///unopened.sed" },
+      position: { line: 0, character: 0 },
+      context: { includeDeclaration: false },
     }),
     [],
   );
@@ -146,6 +172,28 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
   );
   server.connection.sendNotification("textDocument/didClose", {
     textDocument: { uri: defaultModeUri },
+  });
+
+  const recoveryUri = "file:///recovery.sed";
+  const recoveryDiagnostics = notification(
+    server.connection,
+    "textDocument/publishDiagnostics",
+    ({ uri: received }) => received === recoveryUri,
+  );
+  server.connection.sendNotification("textDocument/didOpen", {
+    textDocument: {
+      uri: recoveryUri,
+      languageId: "sed",
+      version: 1,
+      text: " }",
+    },
+  });
+  assert.deepEqual(
+    (await recoveryDiagnostics).diagnostics.map(({ code }) => code),
+    ["unmatched-closing-brace"],
+  );
+  server.connection.sendNotification("textDocument/didClose", {
+    textDocument: { uri: recoveryUri },
   });
 
   const uri = "file:///integration.sed";
@@ -273,6 +321,91 @@ test("serves the complete document lifecycle over default stdio", async (t) => {
     textDocument: { uri },
   });
   assert.equal((await closed).version, 2);
+  assert.equal(server.stderr(), "");
+});
+
+test("debounces changed diagnostics and cancels closed documents", async (t) => {
+  const server = startServer();
+  t.after(async () => stopServer(server));
+  await initialize(server.connection, {});
+
+  const uri = "file:///diagnostic-scheduling.sed";
+  const observed = [];
+  const waiters = new Map();
+  const disposable = server.connection.onNotification(
+    "textDocument/publishDiagnostics",
+    (params) => {
+      if (params.uri === uri) {
+        observed.push(params);
+        const waiter = waiters.get(params.version);
+        if (waiter !== undefined) {
+          waiters.delete(params.version);
+          clearTimeout(waiter.timeout);
+          waiter.resolve(params);
+        }
+      }
+    },
+  );
+  t.after(() => {
+    disposable.dispose();
+    for (const { timeout } of waiters.values()) {
+      clearTimeout(timeout);
+    }
+    waiters.clear();
+  });
+  const diagnosticsForVersion = (version) =>
+    new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        waiters.delete(version);
+        reject(
+          new Error(`Timed out waiting for diagnostics version ${version}.`),
+        );
+      }, 10_000);
+      waiters.set(version, { resolve, timeout });
+    });
+
+  const opened = diagnosticsForVersion(1);
+  server.connection.sendNotification("textDocument/didOpen", {
+    textDocument: {
+      uri,
+      languageId: "sed",
+      version: 1,
+      text: "p\n",
+    },
+  });
+  await opened;
+
+  const latest = diagnosticsForVersion(3);
+  for (const [version, text] of [
+    [2, "/a\\?/p\n"],
+    [3, "p\n"],
+  ]) {
+    server.connection.sendNotification("textDocument/didChange", {
+      textDocument: { uri, version },
+      contentChanges: [{ text }],
+    });
+  }
+  assert.deepEqual((await latest).diagnostics, []);
+  await wait(100);
+  assert.deepEqual(
+    observed.map(({ version }) => version),
+    [1, 3],
+  );
+
+  const closed = diagnosticsForVersion(4);
+  server.connection.sendNotification("textDocument/didChange", {
+    textDocument: { uri, version: 4 },
+    contentChanges: [{ text: "/a\\?/p\n" }],
+  });
+  server.connection.sendNotification("textDocument/didClose", {
+    textDocument: { uri },
+  });
+  assert.deepEqual((await closed).diagnostics, []);
+  await wait(100);
+  assert.deepEqual(
+    observed.map(({ version }) => version),
+    [1, 3, 4],
+  );
   assert.equal(server.stderr(), "");
 });
 
@@ -404,7 +537,7 @@ test("uses legacy strings when markup formats are not advertised", async (t) => 
         }),
         {
           contents:
-            "### `D` — Delete First Line\n\n```sed\n[address[,address]]D\n```\n\nDeletes through the first newline and restarts the cycle without reading input, or acts like `d` when no newline exists.",
+            "### `D` — Delete First Line\n\n```sed\n[address[,address]]D\n```\n\nDeletes through the first newline and restarts the cycle without reading input, or acts like d when no newline exists.",
           range: {
             start: { line: 0, character: 0 },
             end: { line: 0, character: 1 },
@@ -461,6 +594,42 @@ test("uses the fixed ERE grammar selected during initialization", async (t) => {
   });
   assert.deepEqual((await published).diagnostics, []);
   assert.equal(server.stderr(), "");
+});
+
+test("uses BRE defaults for omitted and null initialization options", async (t) => {
+  for (const [name, options] of [
+    ["omitted", undefined],
+    ["null", null],
+  ]) {
+    await t.test(name, async () => {
+      const server = startServer();
+      try {
+        const initialized = await initialize(server.connection, options);
+        assert.equal(initialized.capabilities.positionEncoding, "utf-16");
+        const uri = `file:///default-${name}.sed`;
+        const published = notification(
+          server.connection,
+          "textDocument/publishDiagnostics",
+          ({ uri: received }) => received === uri,
+        );
+        server.connection.sendNotification("textDocument/didOpen", {
+          textDocument: {
+            uri,
+            languageId: "sed",
+            version: 1,
+            text: "/a\\?/p\n",
+          },
+        });
+        assert.deepEqual(
+          (await published).diagnostics.map(({ code }) => code),
+          ["bre-question-mark-escape"],
+        );
+        assert.equal(server.stderr(), "");
+      } finally {
+        await stopServer(server);
+      }
+    });
+  }
 });
 
 test("rejects unknown initialization options", async (t) => {

@@ -1,5 +1,3 @@
-import { MarkupKind } from "vscode-languageserver";
-
 const addressPrefixByMaximum = Object.freeze([
   "",
   "[address]",
@@ -49,7 +47,7 @@ const commandReferenceList = Object.freeze([
     title: "Append Text",
     syntax: "a\\\ntext",
     description:
-      "Schedules text for standard output before the next input fetch, before `q`, or at the end of the script.",
+      "Schedules text for standard output before the next input fetch, before q, or at the end of the script.",
   }),
   defineCommand({
     verb: "b",
@@ -80,7 +78,7 @@ const commandReferenceList = Object.freeze([
     title: "Delete First Line",
     syntax: "D",
     description:
-      "Deletes through the first newline and restarts the cycle without reading input, or acts like `d` when no newline exists.",
+      "Deletes through the first newline and restarts the cycle without reading input, or acts like d when no newline exists.",
   }),
   defineCommand({
     verb: "g",
@@ -187,7 +185,7 @@ const commandReferenceList = Object.freeze([
     title: "Test and Branch",
     syntax: "t [label]",
     description:
-      "Branches to label if a substitution has occurred since the last input read or previous `t`, or to the end when label is omitted.",
+      "Branches to label if a substitution has occurred since the last input read or previous t, or to the end when label is omitted.",
   }),
   defineCommand({
     verb: "w",
@@ -217,7 +215,7 @@ const commandReferenceList = Object.freeze([
     title: "Label",
     syntax: ":label",
     description:
-      "Defines a label for `b` and `t` without otherwise changing processing.",
+      "Defines a label for b and t without otherwise changing processing.",
   }),
   defineCommand({
     verb: "=",
@@ -232,7 +230,7 @@ const commandReferenceList = Object.freeze([
     title: "Comment",
     syntax: "#comment",
     description:
-      "Ignores the remainder of the line; `#n` as the first two script characters also suppresses default output.",
+      "Ignores the remainder of the line; #n as the first two script characters also suppresses default output.",
   }),
 ]);
 
@@ -292,6 +290,45 @@ const substitutionFlagReferenceByType = new Map(
   ]),
 );
 
+export function assertDocumentationKind(kind) {
+  if (kind !== "markdown" && kind !== "plaintext") {
+    throw new TypeError(`Unsupported markup kind: ${String(kind)}`);
+  }
+}
+
+function maximumBacktickRun(value) {
+  let current = 0;
+  let maximum = 0;
+  for (const character of value) {
+    current = character === "`" ? current + 1 : 0;
+    maximum = Math.max(maximum, current);
+  }
+  return maximum;
+}
+
+function inlineCode(value) {
+  const backticks = maximumBacktickRun(value);
+  if (backticks === 0) {
+    return `\`${value}\``;
+  }
+  const fence = "`".repeat(backticks + 1);
+  return `${fence} ${value} ${fence}`;
+}
+
+export function referenceDocumentation(reference, kind) {
+  assertDocumentationKind(kind);
+  return kind === "markdown"
+    ? `\`\`\`sed\n${reference.synopsis}\n\`\`\`\n\n${reference.description}`
+    : `${reference.synopsis}\n\n${reference.description}`;
+}
+
+export function hoverDocumentation(documentation, kind) {
+  const reference = referenceDocumentation(documentation, kind);
+  return kind === "markdown"
+    ? `### ${inlineCode(documentation.display)} — ${documentation.title}\n\n${reference}`
+    : `${documentation.display} — ${documentation.title}\n\n${reference}`;
+}
+
 export function commandReferences() {
   return commandReferenceList;
 }
@@ -306,27 +343,4 @@ export function substitutionFlagReferences() {
 
 export function substitutionFlagReferenceForType(nodeType) {
   return substitutionFlagReferenceByType.get(nodeType);
-}
-
-function plainReferenceProse(value) {
-  return value.replace(/`([^`]*)`/g, "$1");
-}
-
-export function referenceDocumentation(reference, kind) {
-  if (kind === MarkupKind.Markdown) {
-    return {
-      kind,
-      value: `\`\`\`sed\n${reference.synopsis}\n\`\`\`\n\n${reference.description}`,
-    };
-  }
-  if (kind === MarkupKind.PlainText) {
-    return {
-      kind,
-      value: `${reference.synopsis}\n\n${plainReferenceProse(reference.description)}`,
-    };
-  }
-  if (kind === null) {
-    return `${reference.synopsis}\n\n${plainReferenceProse(reference.description)}`;
-  }
-  throw new TypeError(`Unsupported markup kind: ${String(kind)}`);
 }

@@ -22,44 +22,6 @@ npm install --global @inknexlab/sed-language-server
 - Go to Definition
 - Hover
 
-## Emacs
-
-Install `sed-ts-mode` and either Eglot or `lsp-mode`.
-
-For Eglot:
-
-```elisp
-(require 'eglot)
-
-(add-to-list 'eglot-server-programs
-             '((sed-ts-mode :language-id "sed")
-               .
-               ("sed-language-server" "--stdio")))
-(add-hook 'sed-ts-mode-hook #'eglot-ensure)
-```
-
-For `lsp-mode`:
-
-```elisp
-(require 'lsp-mode)
-
-(add-to-list 'lsp-language-id-configuration '(sed-ts-mode . "sed"))
-(add-hook 'sed-ts-mode-hook #'lsp-deferred)
-```
-
-The server uses POSIX Basic Regular Expressions by default. To use POSIX
-Extended Regular Expressions with Eglot, replace the server entry above with:
-
-```elisp
-(add-to-list 'eglot-server-programs
-             '((sed-ts-mode :language-id "sed")
-               .
-               ("sed-language-server" "--stdio"
-                :initializationOptions (:regex "ere"))))
-```
-
-The selected regular expression mode remains fixed for the server process.
-
 ## Parser
 
 Includes a WebAssembly parser generated from

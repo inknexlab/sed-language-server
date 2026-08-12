@@ -1,4 +1,4 @@
-import { diagnostics as analyze } from "@inknexlab/sed-language-server/analysis";
+import { diagnostics as analyzeDiagnostics } from "@inknexlab/sed-language-server/analysis";
 import { DiagnosticSeverity } from "vscode-languageserver";
 
 const severityByName = Object.freeze({
@@ -27,7 +27,11 @@ function compareDiagnostics(left, right) {
 
 export function diagnostics(snapshot) {
   const source = snapshot.document.getText();
-  return analyze({ mode: snapshot.mode, source, tree: snapshot.tree })
+  return analyzeDiagnostics({
+    mode: snapshot.mode,
+    source,
+    tree: snapshot.tree,
+  })
     .map(({ startOffset, endOffset, severity, ...value }) => ({
       ...value,
       range: {

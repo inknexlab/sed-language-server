@@ -29,7 +29,7 @@ test("maps Hover content and source offsets to negotiated LSP values", async () 
       },
     });
     assert.equal(
-      hover(snapshot, position, null).contents,
+      hover(snapshot, position).contents,
       "### `a` — Append Text\n\n```sed\n[address]a\\\ntext\n```\n\nSchedules text for standard output before the next input fetch, before q, or at the end of the script.",
     );
   });

@@ -11,7 +11,7 @@ import {
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const treeSitterPosixSedRevision = "77dbaf6ccc12c360b75d9f3077ccb474d0cdaaf9";
+const grammarRevision = "77dbaf6ccc12c360b75d9f3077ccb474d0cdaaf9";
 const syntaxIssueOutcomeNames = new Set([
   "implementation_defined_syntax",
   "implementation_option_syntax",
@@ -73,7 +73,6 @@ function requiredNamedChildTypes(node, languageName) {
       `${languageName} ${node.type} must require exactly one named child.`,
     );
   }
-
   const types = children.types.map(({ type }) => type);
   if (new Set(types).size !== types.length) {
     throw new Error(`${languageName} ${node.type} repeats a child type.`);
@@ -201,15 +200,11 @@ function main() {
     projectDirectory,
     "node_modules/tree-sitter-cli/cli.js",
   );
-  const biomePath = resolve(
-    projectDirectory,
-    "node_modules/@biomejs/biome/bin/biome",
-  );
 
   const actualRevision = runGit(grammarDirectory, ["rev-parse", "HEAD"]);
-  if (actualRevision !== treeSitterPosixSedRevision) {
+  if (actualRevision !== grammarRevision) {
     throw new Error(
-      `Expected tree-sitter-posix-sed ${treeSitterPosixSedRevision}, received ${actualRevision}.`,
+      `Expected tree-sitter-posix-sed ${grammarRevision}, received ${actualRevision}.`,
     );
   }
 
@@ -253,23 +248,13 @@ function main() {
     manifestPath,
     `${JSON.stringify(
       {
-        revision: treeSitterPosixSedRevision,
+        revision: grammarRevision,
         languages: manifestLanguages,
       },
       null,
       2,
     )}\n`,
   );
-  const formatting = spawnSync(
-    process.execPath,
-    [biomePath, "format", "--write", manifestPath],
-    { stdio: "inherit" },
-  );
-  if (formatting.status !== 0) {
-    throw new Error("Failed to format the tree-sitter-posix-sed manifest.", {
-      cause: formatting.error,
-    });
-  }
 }
 
 main();

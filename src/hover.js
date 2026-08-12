@@ -36,10 +36,9 @@ function hoverDocumentation(documentation, kind) {
     : `${documentation.display} — ${documentation.title}\n\n${reference}`;
 }
 
-export function hover(snapshot, position, contentKind) {
+export function hover(snapshot, position, contentKind = null) {
   const { document, mode, tree } = snapshot;
-  const documentationKind =
-    contentKind === null ? MarkupKind.Markdown : contentKind;
+  const documentationKind = contentKind ?? MarkupKind.Markdown;
   const result = analyzeHover(
     { mode, source: document.getText(), tree },
     document.offsetAt(position),

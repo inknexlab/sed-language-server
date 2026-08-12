@@ -116,6 +116,39 @@ test("applies sequential LSP changes incrementally in both modes", async () => {
   }
 });
 
+test("applies a later change after an earlier change forms CRLF", async () => {
+  for (const mode of regularExpressionModes()) {
+    const store = await SyntaxStore.create(mode);
+    try {
+      const document = documentFor("p\nq\n");
+      store.open(document);
+      const updated = store.update(
+        document.uri,
+        [
+          {
+            range: {
+              start: { line: 0, character: 1 },
+              end: { line: 0, character: 1 },
+            },
+            text: "\r",
+          },
+          {
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 1, character: 0 },
+            },
+            text: "",
+          },
+        ],
+        2,
+      );
+      assert.equal(updated.document.getText(), "q\n");
+    } finally {
+      store.dispose();
+    }
+  }
+});
+
 test("incremental parsing preserves Unicode and scanner state", async () => {
   for (const mode of ["bre", "ere"]) {
     await assertIncrementalMatchesFull({

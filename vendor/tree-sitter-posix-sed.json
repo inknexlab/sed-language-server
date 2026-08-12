@@ -97,7 +97,9 @@
       "language": "posix_sed_ere",
       "wasm": "tree-sitter-posix-sed-ere.wasm",
       "outcomes": {
-        "implementation_option_syntax": ["omitted_file_separator"],
+        "implementation_option_syntax": [
+          "omitted_file_separator"
+        ],
         "incomplete_syntax": [
           "incomplete_alternative",
           "incomplete_bracket_term",

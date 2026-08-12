@@ -10,8 +10,8 @@ function analysisSnapshot({ document, mode, tree }) {
 function locations(document, ranges) {
   return ranges.map(({ startOffset, endOffset }) => ({
     range: {
-      end: document.positionAt(endOffset),
       start: document.positionAt(startOffset),
+      end: document.positionAt(endOffset),
     },
     uri: document.uri,
   }));

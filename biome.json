@@ -1,4 +1,7 @@
 {
+  "files": {
+    "includes": ["**", "!vendor"]
+  },
   "javascript": {
     "formatter": {
       "indentStyle": "space",

@@ -25,13 +25,27 @@ function snapshotFor(state, mode) {
   });
 }
 
-function copyDocument(document) {
+function copyDocument(document, version = document.version) {
   return TextDocument.create(
     document.uri,
     document.languageId,
-    document.version,
+    version,
     document.getText(),
   );
+}
+
+function applyDocumentChange(document, change, version) {
+  const edit = editForChange(document, change);
+  const source = document.getText();
+  return {
+    document: TextDocument.create(
+      document.uri,
+      document.languageId,
+      version,
+      `${source.slice(0, edit.startIndex)}${change.text}${source.slice(edit.oldEndIndex)}`,
+    ),
+    edit,
+  };
 }
 
 export { regularExpressionModes };
@@ -78,11 +92,12 @@ export class SyntaxStore {
       throw new Error(`Cannot update unopened document: ${uri}`);
     }
 
-    let nextDocument = copyDocument(state.document);
+    let nextDocument = copyDocument(state.document, version);
     const edits = [];
     for (const change of changes) {
-      edits.push(editForChange(nextDocument, change));
-      nextDocument = TextDocument.update(nextDocument, [change], version);
+      const applied = applyDocumentChange(nextDocument, change, version);
+      nextDocument = applied.document;
+      edits.push(applied.edit);
     }
     const nextTree = this.#parser.reparse(
       nextDocument.getText(),

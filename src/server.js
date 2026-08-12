@@ -29,8 +29,8 @@ const serverPhases = Object.freeze({
   shutdown: "shutdown",
   waiting: "waiting",
 });
+let hoverContentKind = null;
 let syntaxStore;
-let hoverContentKind = preferredMarkupKind();
 let serverPhase = serverPhases.waiting;
 
 function preferredMarkupKind(formats) {
@@ -109,11 +109,7 @@ function publishDiagnostics(uri, version) {
   if (activeStore()?.document(uri, version) !== document) {
     return;
   }
-  connection.sendDiagnostics({
-    uri,
-    version,
-    diagnostics: values,
-  });
+  connection.sendDiagnostics({ uri, version, diagnostics: values });
 }
 
 function cancelDiagnostics(uri) {
@@ -196,9 +192,7 @@ connection.onInitialize(async ({ capabilities, initializationOptions }) => {
       hoverProvider: true,
       documentFormattingProvider: true,
     },
-    serverInfo: {
-      name: "sed-language-server",
-    },
+    serverInfo: { name: "sed-language-server" },
   };
 });
 
@@ -236,18 +230,18 @@ connection.onDefinition(({ textDocument, position }) => {
   return current === undefined ? [] : definitions(current, position);
 });
 
-connection.onHover(({ textDocument, position }) => {
-  const current = requestSnapshot(textDocument.uri);
-  return current === undefined
-    ? null
-    : (hover(current, position, hoverContentKind) ?? null);
-});
-
 connection.onReferences(({ textDocument, position, context }) => {
   const current = requestSnapshot(textDocument.uri);
   return current === undefined
     ? []
     : references(current, position, context.includeDeclaration);
+});
+
+connection.onHover(({ textDocument, position }) => {
+  const current = requestSnapshot(textDocument.uri);
+  return current === undefined
+    ? null
+    : (hover(current, position, hoverContentKind) ?? null);
 });
 
 connection.onDocumentFormatting(({ textDocument, options }) => {
@@ -259,7 +253,7 @@ function dispose() {
   cancelAllDiagnostics();
   syntaxStore?.dispose();
   syntaxStore = undefined;
-  hoverContentKind = preferredMarkupKind();
+  hoverContentKind = null;
 }
 
 connection.onShutdown(() => {

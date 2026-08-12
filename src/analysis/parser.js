@@ -143,7 +143,7 @@ function applySourceEdits(source, edits, tree) {
   return editedSource;
 }
 
-function hasRecovery(tree) {
+function requiresCanonicalParse(tree) {
   return (
     tree.rootNode.hasError ||
     tree.rootNode.descendantsOfType("syntax_issue").length > 0
@@ -193,7 +193,7 @@ export class SedParser {
 
   #parse(source, oldTree) {
     let tree = this.#parseTree(source, oldTree);
-    if (oldTree !== undefined && hasRecovery(tree)) {
+    if (oldTree !== undefined && requiresCanonicalParse(tree)) {
       tree.delete();
       tree = this.#parseTree(source);
     }
@@ -227,7 +227,7 @@ export class SedParser {
       throw new TypeError("Incremental edits must be an array.");
     }
 
-    if (hasRecovery(oldTree)) {
+    if (requiresCanonicalParse(oldTree)) {
       const editedSource = applySourceEdits(parsed.source, edits);
       if (editedSource !== source) {
         throw new TypeError(

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
-import { hover as analyze } from "../../src/analysis/hover.js";
+import { hover as analyzeHoverAtOffset } from "../../src/analysis/hover.js";
 import { offsetAt, positionAt, withAnalysisStore } from "./helpers.js";
 
 async function withStore(callback) {
@@ -9,7 +9,10 @@ async function withStore(callback) {
 }
 
 function hover(snapshot, position) {
-  const result = analyze(snapshot, offsetAt(snapshot.source, position));
+  const result = analyzeHoverAtOffset(
+    snapshot,
+    offsetAt(snapshot.source, position),
+  );
   if (result === undefined) {
     return undefined;
   }
@@ -23,7 +26,7 @@ function hover(snapshot, position) {
 }
 
 function analyzeHover(snapshot, offset) {
-  return analyze(snapshot, offset);
+  return analyzeHoverAtOffset(snapshot, offset);
 }
 
 function rangeAt(character, length = 1, line = 0) {
@@ -1645,7 +1648,7 @@ async function withSnapshot(mode, source, callback) {
 
 test("returns source-offset presentation-neutral Hover documentation", async () => {
   await withSnapshot("bre", "p\n", (snapshot) => {
-    assert.deepEqual(analyze(snapshot, 0), {
+    assert.deepEqual(analyzeHover(snapshot, 0), {
       startOffset: 0,
       endOffset: 1,
       documentation: {
@@ -1655,15 +1658,15 @@ test("returns source-offset presentation-neutral Hover documentation", async () 
         description: "Writes the pattern space to standard output.",
       },
     });
-    assert.equal(analyze(snapshot, 1), undefined);
+    assert.equal(analyzeHover(snapshot, 1), undefined);
   });
 });
 
 test("validates the public Hover offset", async () => {
   await withSnapshot("bre", "p\n", (snapshot) => {
-    assert.throws(() => analyze(snapshot, 0.5), /must be an integer/);
-    assert.throws(() => analyze(snapshot, -1), /outside the source/);
-    assert.throws(() => analyze(snapshot, 3), /outside the source/);
+    assert.throws(() => analyzeHover(snapshot, 0.5), /must be an integer/);
+    assert.throws(() => analyzeHover(snapshot, -1), /outside the source/);
+    assert.throws(() => analyzeHover(snapshot, 3), /outside the source/);
   });
 });
 

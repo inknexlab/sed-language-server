@@ -275,6 +275,17 @@ test("checks label portability, length, definitions, and references", async () =
   );
 });
 
+test("ignores labels inside native recovery", async () => {
+  const labelCodes = (source) =>
+    codes(source).filter((code) =>
+      ["duplicate-label", "undefined-label"].includes(code),
+    );
+  assert.deepEqual(labelCodes(await diagnosticsFor("b t\n{;:t")), [
+    "undefined-label",
+  ]);
+  assert.deepEqual(labelCodes(await diagnosticsFor("{;b t")), []);
+});
+
 test("reports only encoding-independent label overflow", async () => {
   assert.equal(
     codes(await diagnosticsFor(":ééééé\n")).includes("long-label"),

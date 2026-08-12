@@ -23,8 +23,15 @@ if (process.argv.length === 2) {
 const connection = createConnection();
 const diagnosticDelay = 50;
 const diagnosticTimers = new Map();
+const serverPhases = Object.freeze({
+  initializing: "initializing",
+  running: "running",
+  shutdown: "shutdown",
+  waiting: "waiting",
+});
 let syntaxStore;
 let hoverContentKind = preferredMarkupKind();
+let serverPhase = serverPhases.waiting;
 
 function preferredMarkupKind(formats) {
   if (Array.isArray(formats)) {
@@ -64,24 +71,42 @@ function initializationMode(options) {
   return mode;
 }
 
-function store() {
-  if (syntaxStore === undefined) {
-    throw new Error("The language server has not been initialized.");
+function activeStore() {
+  return serverPhase === serverPhases.running ? syntaxStore : undefined;
+}
+
+function requestStore() {
+  if (
+    serverPhase === serverPhases.waiting ||
+    serverPhase === serverPhases.initializing
+  ) {
+    throw new ResponseError(
+      ErrorCodes.ServerNotInitialized,
+      "The language server has not been initialized.",
+    );
+  }
+  if (serverPhase !== serverPhases.running || syntaxStore === undefined) {
+    throw new ResponseError(
+      ErrorCodes.InvalidRequest,
+      "The language server has been shut down.",
+    );
   }
   return syntaxStore;
 }
 
-function snapshot(uri, version) {
-  return syntaxStore?.snapshot(uri, version);
+function requestSnapshot(uri, version) {
+  return requestStore().snapshot(uri, version);
 }
 
 function publishDiagnostics(uri, version) {
-  const current = snapshot(uri, version);
-  if (current === undefined) {
+  const currentStore = activeStore();
+  const document = currentStore?.document(uri, version);
+  if (document === undefined) {
     return;
   }
-  const values = diagnostics(current);
-  if (snapshot(uri, version) === undefined) {
+  const current = currentStore.snapshot(uri, version);
+  const values = current === undefined ? [] : diagnostics(current);
+  if (activeStore()?.document(uri, version) !== document) {
     return;
   }
   connection.sendDiagnostics({
@@ -133,16 +158,32 @@ function scheduleDiagnostics(uri, version) {
 const documents = new TextDocuments({
   create: TextDocument.create,
   update(document, changes, version) {
-    return store().update(document.uri, changes, version).document;
+    const currentStore = activeStore();
+    return currentStore?.has(document.uri)
+      ? currentStore.update(document.uri, changes, version).document
+      : TextDocument.update(document, changes, version);
   },
 });
 
 connection.onInitialize(async ({ capabilities, initializationOptions }) => {
-  const mode = initializationMode(initializationOptions);
-  hoverContentKind = preferredMarkupKind(
-    capabilities.textDocument?.hover?.contentFormat,
-  );
-  syntaxStore = await SyntaxStore.create(mode);
+  if (serverPhase !== serverPhases.waiting) {
+    throw new ResponseError(
+      ErrorCodes.InvalidRequest,
+      "The initialize request may only be sent once.",
+    );
+  }
+  serverPhase = serverPhases.initializing;
+  try {
+    const mode = initializationMode(initializationOptions);
+    hoverContentKind = preferredMarkupKind(
+      capabilities.textDocument?.hover?.contentFormat,
+    );
+    syntaxStore = await SyntaxStore.create(mode);
+    serverPhase = serverPhases.running;
+  } catch (error) {
+    serverPhase = serverPhases.shutdown;
+    throw error;
+  }
   return {
     capabilities: {
       positionEncoding: PositionEncodingKind.UTF16,
@@ -162,17 +203,27 @@ connection.onInitialize(async ({ capabilities, initializationOptions }) => {
 });
 
 documents.onDidOpen(({ document }) => {
-  store().open(document);
+  const currentStore = activeStore();
+  if (currentStore === undefined) {
+    return;
+  }
+  currentStore.open(document);
   scheduleDiagnostics(document.uri, document.version);
 });
 
 documents.onDidChangeContent(({ document }) => {
-  scheduleDiagnostics(document.uri, document.version);
+  if (activeStore()?.has(document.uri)) {
+    scheduleDiagnostics(document.uri, document.version);
+  }
 });
 
 documents.onDidClose(({ document }) => {
+  const currentStore = activeStore();
+  if (currentStore === undefined || !currentStore.has(document.uri)) {
+    return;
+  }
   cancelDiagnostics(document.uri);
-  syntaxStore?.close(document.uri);
+  currentStore.close(document.uri);
   connection.sendDiagnostics({
     uri: document.uri,
     version: document.version,
@@ -181,41 +232,59 @@ documents.onDidClose(({ document }) => {
 });
 
 connection.onDefinition(({ textDocument, position }) => {
-  const current = snapshot(textDocument.uri);
+  const current = requestSnapshot(textDocument.uri);
   return current === undefined ? [] : definitions(current, position);
 });
 
 connection.onHover(({ textDocument, position }) => {
-  const current = snapshot(textDocument.uri);
+  const current = requestSnapshot(textDocument.uri);
   return current === undefined
     ? null
     : (hover(current, position, hoverContentKind) ?? null);
 });
 
 connection.onReferences(({ textDocument, position, context }) => {
-  const current = snapshot(textDocument.uri);
+  const current = requestSnapshot(textDocument.uri);
   return current === undefined
     ? []
     : references(current, position, context.includeDeclaration);
 });
 
 connection.onDocumentFormatting(({ textDocument, options }) => {
-  const current = snapshot(textDocument.uri);
+  const current = requestSnapshot(textDocument.uri);
   return current === undefined ? [] : formattingEdits(current, options);
 });
 
-connection.onShutdown(() => {
+function dispose() {
   cancelAllDiagnostics();
   syntaxStore?.dispose();
   syntaxStore = undefined;
   hoverContentKind = preferredMarkupKind();
+}
+
+connection.onShutdown(() => {
+  if (
+    serverPhase === serverPhases.waiting ||
+    serverPhase === serverPhases.initializing
+  ) {
+    throw new ResponseError(
+      ErrorCodes.ServerNotInitialized,
+      "The language server has not been initialized.",
+    );
+  }
+  if (serverPhase !== serverPhases.running) {
+    throw new ResponseError(
+      ErrorCodes.InvalidRequest,
+      "The language server has already been shut down.",
+    );
+  }
+  serverPhase = serverPhases.shutdown;
+  dispose();
 });
 
 connection.onExit(() => {
-  cancelAllDiagnostics();
-  syntaxStore?.dispose();
-  syntaxStore = undefined;
-  hoverContentKind = preferredMarkupKind();
+  serverPhase = serverPhases.shutdown;
+  dispose();
 });
 
 documents.listen(connection);

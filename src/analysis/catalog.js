@@ -536,7 +536,9 @@ export function regularExpressionReference(kind, value) {
     );
   }
   if (kind === "character_class") {
-    return characterClassReferences[value] ?? regularExpressionReferences[kind];
+    return Object.hasOwn(characterClassReferences, value)
+      ? characterClassReferences[value]
+      : regularExpressionReferences[kind];
   }
   return regularExpressionReferences[kind];
 }

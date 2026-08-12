@@ -152,6 +152,9 @@ export function labelSymbols(source, root) {
     .reverse();
   while (stack.length > 0) {
     const { node, command: ancestorCommand } = stack.pop();
+    if (invalidStructure(node)) {
+      continue;
+    }
     const command = node.type === "editing_command" ? node : ancestorCommand;
     let kind;
     if (node.type === "label_function") {

@@ -84,6 +84,20 @@ test("does not treat an omitted branch target as a label", async () => {
   });
 });
 
+test("ignores label definitions and references inside native recovery", async () => {
+  await withSnapshot("bre", "b t\n{;:t", (snapshot) => {
+    assert.deepEqual(definitions(snapshot, 2), []);
+    assert.deepEqual(definitions(snapshot, 7), []);
+    assert.deepEqual(references(snapshot, 2, false), [
+      { startOffset: 2, endOffset: 3 },
+    ]);
+  });
+  await withSnapshot("bre", "{;b t", (snapshot) => {
+    assert.deepEqual(definitions(snapshot, 4), []);
+    assert.deepEqual(references(snapshot, 4, false), []);
+  });
+});
+
 test("validates public symbol query arguments", async () => {
   await withSnapshot("bre", ":target\nb target\n", (snapshot) => {
     assert.throws(() => definitions(snapshot, 0.5), /must be an integer/);

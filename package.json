@@ -19,7 +19,7 @@
     "check:write": "biome check --write .",
     "prepublishOnly": "npm run check && npm test",
     "start": "node src/server.js --stdio",
-    "test": "node --test 'test/*.test.js' 'test/analysis/*.test.js'"
+    "test": "node --test \"test/*.test.js\" \"test/analysis/*.test.js\""
   },
   "license": "MIT",
   "repository": {

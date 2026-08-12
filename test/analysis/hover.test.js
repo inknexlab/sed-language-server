@@ -1550,6 +1550,22 @@ test("describes every standard character class in both modes", async () => {
   }
 });
 
+test("uses generic documentation for names inherited by ordinary objects", async () => {
+  for (const mode of ["bre", "ere"]) {
+    await withAnalysisStore(mode, (store) => {
+      const source = "/[[:constructor:]]/p\n";
+      const snapshot = store.open(source);
+      const range = occurrence(source, "[:constructor:]");
+      assertAnalysisHover(snapshot, range.start + 2, range, {
+        title: "Character Class Expression",
+        synopsis: "[[:class:]]",
+        description:
+          "Represents the set of characters belonging to this locale-defined character class.",
+      });
+    });
+  }
+});
+
 test("omits recovered ERE syntax and returns source offsets", async () => {
   await withAnalysisStore("ere", (store) => {
     for (const source of ["/{2}/p\n", "/a{2/p\n", "/(a/p\n", "/[abc/p\n"]) {

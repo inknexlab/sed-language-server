@@ -482,6 +482,43 @@ test("uses legacy strings when markup formats are not advertised", async (t) => 
   }
 });
 
+test("enforces the LSP request lifecycle", async (t) => {
+  const server = startServer();
+  t.after(async () => stopServer(server));
+  const definitionRequest = {
+    textDocument: { uri: "file:///lifecycle.sed" },
+    position: { line: 0, character: 0 },
+  };
+
+  await assert.rejects(
+    server.connection.sendRequest("textDocument/definition", definitionRequest),
+    { code: -32002 },
+  );
+  await initialize(server.connection, {});
+  await assert.rejects(
+    server.connection.sendRequest("initialize", {
+      processId: null,
+      rootUri: null,
+      capabilities: {},
+      initializationOptions: { regex: "ere" },
+    }),
+    {
+      code: -32600,
+      message: "The initialize request may only be sent once.",
+    },
+  );
+
+  await server.connection.sendRequest("shutdown");
+  await assert.rejects(
+    server.connection.sendRequest("textDocument/definition", definitionRequest),
+    { code: -32600 },
+  );
+  const exited = new Promise((resolve) => server.child.once("exit", resolve));
+  server.connection.sendNotification("exit");
+  assert.equal(await exited, 0);
+  assert.equal(server.stderr(), "");
+});
+
 test("uses the fixed ERE grammar selected during initialization", async (t) => {
   const server = startServer();
   t.after(async () => stopServer(server));

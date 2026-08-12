@@ -92,6 +92,20 @@ export class SyntaxStore {
     return this.#replace(uri, nextDocument, nextTree);
   }
 
+  document(uri, version) {
+    this.#assertAvailable();
+    const state = this.#documents.get(uri);
+    return state === undefined ||
+      (version !== undefined && state.document.version !== version)
+      ? undefined
+      : state.document;
+  }
+
+  has(uri) {
+    this.#assertAvailable();
+    return this.#documents.has(uri);
+  }
+
   snapshot(uri, version) {
     this.#assertAvailable();
     const state = this.#documents.get(uri);

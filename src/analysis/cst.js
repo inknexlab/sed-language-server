@@ -1,3 +1,5 @@
+export const checkpointInterval = 512;
+
 function requiredNamedChild(node) {
   if (node.namedChildCount !== 1) {
     throw new Error(`${node.type} must have exactly one named child.`);
@@ -8,9 +10,6 @@ function requiredNamedChild(node) {
   }
   return child;
 }
-
-export const recoveryNodeTypes = Object.freeze([]);
-const recoveryTypes = new Set(recoveryNodeTypes);
 
 export function descendants(root, type) {
   const matches = [];
@@ -43,27 +42,21 @@ export function rangeForNode(node) {
   };
 }
 
-export function invalidStructure(node) {
-  return (
-    node.isMissing || node.type === "ERROR" || recoveryTypes.has(node.type)
-  );
+export function countToken(source, node) {
+  const value = textForNode(source, node);
+  if (value.length === 0) {
+    return undefined;
+  }
+  for (const character of value) {
+    if (character < "0" || character > "9") {
+      return undefined;
+    }
+  }
+  return BigInt(value);
 }
 
-export function mayContainInvalidStructure(root) {
-  return root.hasError || recoveryTypes.size > 0;
-}
-
-export function delimiterTokenFor(node, field) {
-  const delimiter = node.childForFieldName(field);
-  const token = delimiter?.childForFieldName("token");
-  return token?.type === "delimiter_token" ? token : undefined;
-}
-
-export function isCompleteContextAddress(node) {
-  return (
-    delimiterTokenFor(node, "opening") !== undefined &&
-    delimiterTokenFor(node, "closing") !== undefined
-  );
+function invalidStructure(node) {
+  return node.isMissing || node.type === "ERROR";
 }
 
 export function functionForCommand(command) {
@@ -74,114 +67,186 @@ export function functionForCommand(command) {
   return wrapper.namedChildren.find(({ type }) => type.endsWith("_function"));
 }
 
-export function structuredIssues(root) {
-  const findings = [];
-  const stack = root.children.map((node) => ({ node, parent: root })).reverse();
-  while (stack.length > 0) {
-    const { node, parent } = stack.pop();
-    if (node.type === "syntax_issue") {
-      const outcomeNode = requiredNamedChild(node);
-      const reasonNode = requiredNamedChild(outcomeNode);
-      findings.push(
-        Object.freeze({
-          kind: "structured",
-          node,
-          parent,
-          outcomeNode,
-          reasonNode,
-          outcome: outcomeNode.type,
-          reason: reasonNode.type,
-        }),
-      );
-    }
-    const children = node.children;
-    for (let index = children.length - 1; index >= 0; index -= 1) {
-      stack.push({ node: children[index], parent: node });
-    }
-  }
-  return findings;
+export function indexedNodes(index, type) {
+  return index.nodesByType.get(type) ?? [];
 }
 
-export function nativeIssues(root) {
-  const findings = [];
+// Indexed nodes are collected in pre-order, so their start offsets never
+// decrease and a descendant is exactly a node contained in the ancestor range.
+export function indexedDescendants(index, type, ancestor, maximum = Infinity) {
+  const nodes = indexedNodes(index, type);
+  let lower = 0;
+  let upper = nodes.length;
+  while (lower < upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    if (nodes[middle].startIndex < ancestor.startIndex) {
+      lower = middle + 1;
+    } else {
+      upper = middle;
+    }
+  }
+  const result = [];
+  for (
+    let position = lower;
+    position < nodes.length &&
+    result.length < maximum &&
+    nodes[position].startIndex < ancestor.endIndex;
+    position += 1
+  ) {
+    const node = nodes[position];
+    if (node.endIndex <= ancestor.endIndex) {
+      result.push(node);
+    }
+  }
+  return result;
+}
+
+export function hasIssue(index, node) {
+  return index.nodesWithIssues.has(node.id);
+}
+
+export async function cstIndex(
+  source,
+  root,
+  indexedTypes,
+  { checkpoint } = {},
+) {
+  const nodesByType = new Map();
+  const native = [];
+  const nodesWithIssues = new Set();
+  const structured = [];
+  const symbols = [];
   const stack = [
     {
       node: root,
-      errorAncestor: false,
+      command: undefined,
+      errorAncestor: undefined,
+      invalidAncestor: false,
+      indexedAncestor: undefined,
       structuredAncestor: false,
     },
   ];
+  let visited = 0;
   while (stack.length > 0) {
-    const { node, errorAncestor, structuredAncestor } = stack.pop();
+    visited += 1;
+    if (checkpoint !== undefined && visited % checkpointInterval === 0) {
+      await checkpoint();
+    }
+    const {
+      node,
+      command: ancestorCommand,
+      errorAncestor,
+      indexedAncestor: ancestorIndex,
+      invalidAncestor,
+      structuredAncestor,
+    } = stack.pop();
+    let indexedAncestor = ancestorIndex;
+    if (node !== root && indexedTypes?.has(node.type)) {
+      const matching = nodesByType.get(node.type) ?? [];
+      matching.push(node);
+      nodesByType.set(node.type, matching);
+      indexedAncestor = { id: node.id, parent: indexedAncestor };
+    }
+
+    let nearestError = errorAncestor;
     if (node.type === "ERROR") {
-      findings.push(
-        Object.freeze({
-          kind: "error",
-          node,
-          errorAncestor,
-          structuredAncestor,
-        }),
-      );
+      if (nearestError !== undefined) {
+        nearestError.hasErrorDescendant = true;
+      }
+      const finding = {
+        kind: "error",
+        node,
+        errorAncestor: nearestError !== undefined,
+        hasErrorDescendant: false,
+        structuredAncestor,
+      };
+      native.push(finding);
+      nearestError = finding;
     }
     if (node.isMissing) {
-      findings.push(
+      native.push({
+        kind: "missing",
+        node,
+        errorAncestor: nearestError !== undefined,
+        hasErrorDescendant: false,
+        structuredAncestor,
+      });
+    }
+    if (node.type === "syntax_issue") {
+      const outcomeNode = requiredNamedChild(node);
+      structured.push(
         Object.freeze({
-          kind: "missing",
           node,
-          errorAncestor,
-          structuredAncestor,
+          outcome: outcomeNode.type,
+          reason: requiredNamedChild(outcomeNode).type,
         }),
       );
     }
+    if (
+      node.type === "ERROR" ||
+      node.isMissing ||
+      node.type === "syntax_issue"
+    ) {
+      for (
+        let current = indexedAncestor;
+        current !== undefined;
+        current = current.parent
+      ) {
+        nodesWithIssues.add(current.id);
+      }
+    }
+
+    const invalid = invalidAncestor || invalidStructure(node);
+    const command =
+      !invalid && node.type === "editing_command" ? node : ancestorCommand;
+    if (!invalid && source !== undefined) {
+      let kind;
+      if (node.type === "label_function") {
+        kind = "definition";
+      } else if (
+        node.type === "branch_function" ||
+        node.type === "test_function"
+      ) {
+        kind = "reference";
+      }
+      if (kind !== undefined) {
+        const label = node.childForFieldName("label");
+        if (label !== null) {
+          symbols.push(
+            Object.freeze({
+              kind,
+              name: textForNode(source, label),
+              node: label,
+              command,
+            }),
+          );
+        }
+      }
+    }
+
     const children = node.children;
     for (let index = children.length - 1; index >= 0; index -= 1) {
       stack.push({
         node: children[index],
-        errorAncestor: errorAncestor || node.type === "ERROR",
+        command,
+        errorAncestor: nearestError,
+        invalidAncestor: invalid,
+        indexedAncestor,
         structuredAncestor: structuredAncestor || node.type === "syntax_issue",
       });
     }
   }
-  return findings;
-}
 
-export function labelSymbols(source, root) {
-  const symbols = [];
-  const stack = root.children
-    .map((node) => ({ node, command: undefined }))
-    .reverse();
-  while (stack.length > 0) {
-    const { node, command: ancestorCommand } = stack.pop();
-    if (invalidStructure(node)) {
-      continue;
-    }
-    const command = node.type === "editing_command" ? node : ancestorCommand;
-    let kind;
-    if (node.type === "label_function") {
-      kind = "definition";
-    } else if (
-      node.type === "branch_function" ||
-      node.type === "test_function"
-    ) {
-      kind = "reference";
-    }
-    if (kind !== undefined) {
-      const label = node.childForFieldName("label");
-      if (label !== null) {
-        symbols.push(
-          Object.freeze({
-            kind,
-            name: textForNode(source, label),
-            node: label,
-            command,
-          }),
-        );
-      }
-    }
-    const children = node.children;
-    for (let index = children.length - 1; index >= 0; index -= 1) {
-      stack.push({ node: children[index], command });
-    }
+  for (const [type, nodes] of nodesByType) {
+    nodesByType.set(type, Object.freeze(nodes));
   }
-  return symbols;
+  return Object.freeze({
+    nativeIssues: Object.freeze(
+      native.map((finding) => Object.freeze(finding)),
+    ),
+    nodesByType,
+    nodesWithIssues,
+    structuredIssues: Object.freeze(structured),
+    symbols: Object.freeze(symbols),
+  });
 }

@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SedAnalysis } from "@inknexlab/sed-language-server/analysis";
 import { DiagnosticSeverity } from "vscode-languageserver";
-import { diagnostics } from "../src/diagnostics.js";
-import { SyntaxStore } from "../src/parser.js";
-import { documentFor } from "./helpers.js";
+import { diagnostics } from "../../src/lsp/diagnostics.js";
+import { documentFor } from "../support.js";
 
 async function diagnosticsFor(source, mode = "bre") {
-  const store = await SyntaxStore.create(mode);
+  const analysis = await SedAnalysis.create(mode);
+  const snapshot = analysis.parse(source);
   try {
-    return diagnostics(store.open(documentFor(source)));
+    const document = documentFor(source);
+    return await diagnostics(analysis, { document, snapshot });
   } finally {
-    store.dispose();
+    snapshot.dispose();
+    await analysis.dispose();
   }
 }
 
@@ -30,20 +33,26 @@ test("maps shared diagnostic offsets and severities to LSP diagnostics", async (
   ]);
 });
 
-test("preserves shared semantic diagnostics in both regex modes", async () => {
-  for (const [mode, source] of [
-    ["bre", "s/\\(a\\)/\\2/\n"],
-    ["ere", "s/(a)/\\2/\n"],
-  ]) {
-    const matching = (await diagnosticsFor(source, mode)).find(
-      ({ code }) => code === "unmatched-replacement-backreference",
-    );
-    assert.equal(matching?.severity, DiagnosticSeverity.Warning, mode);
-    assert.equal(matching?.source, "sed-language-server", mode);
-  }
+test("rejects severities outside the sed analysis contract", async () => {
+  const document = documentFor("p\n");
+  const analysis = {
+    diagnostics: async () => [
+      {
+        code: "unsupported",
+        endOffset: 1,
+        message: "Unsupported severity.",
+        severity: "information",
+        startOffset: 0,
+      },
+    ],
+  };
+  await assert.rejects(
+    diagnostics(analysis, { document, snapshot: {} }),
+    /Unsupported sed diagnostic severity: information/,
+  );
 });
 
-test("orders diagnostics after CRLF offsets are projected to LSP positions", async () => {
+test("keeps the analysis order when CRLF offsets project to one LSP position", async () => {
   const values = await diagnosticsFor(",/\r\n");
   assert.deepEqual(
     values.map(({ code, range }) => ({ code, range })),

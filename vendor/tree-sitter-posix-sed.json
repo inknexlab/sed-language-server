@@ -1,9 +1,10 @@
 {
-  "revision": "77dbaf6ccc12c360b75d9f3077ccb474d0cdaaf9",
+  "revision": "9f6183f650b58cfd4ee9d05fe83655e542ba367c",
   "languages": {
     "bre": {
       "language": "posix_sed_bre",
       "wasm": "tree-sitter-posix-sed-bre.wasm",
+      "sha256": "9358b376faab43a2a12a318852a2ce16ab2ad1983478fab26e70d63c711ea440",
       "outcomes": {
         "implementation_defined_syntax": [
           "bre_plus_escape",
@@ -96,6 +97,7 @@
     "ere": {
       "language": "posix_sed_ere",
       "wasm": "tree-sitter-posix-sed-ere.wasm",
+      "sha256": "274e7eac8a81eb1f943a3e5bc747996393496e9615c05977ad46f9b707908008",
       "outcomes": {
         "implementation_option_syntax": [
           "omitted_file_separator"

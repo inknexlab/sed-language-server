@@ -1,22 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SedAnalysis } from "@inknexlab/sed-language-server/analysis";
 import {
   diagnosticMessages,
   diagnosticSeverities,
-  diagnostics,
-  syntaxDiagnostics,
 } from "../../src/analysis/diagnostics.js";
-import { grammarManifest, SedParser } from "../../src/analysis/parser.js";
+import { grammarManifest } from "../../src/analysis/engine.js";
 
-async function diagnosticsFor(source, mode = "bre", syntaxOnly = false) {
-  const parser = await SedParser.create(mode);
-  const tree = parser.parse(source);
+async function diagnosticsFor(source, mode = "bre") {
+  const analysis = await SedAnalysis.create(mode);
+  const snapshot = analysis.parse(source);
   try {
-    const snapshot = { mode, source, tree };
-    return syntaxOnly ? syntaxDiagnostics(snapshot) : diagnostics(snapshot);
+    return await analysis.diagnostics(snapshot);
   } finally {
-    tree.delete();
-    parser.delete();
+    snapshot.dispose();
+    await analysis.dispose();
   }
 }
 
@@ -68,19 +66,19 @@ test("maps syntax issue outcomes to the selected severities", async () => {
     ["1! p\n", "blanks-after-negation", "warning"],
   ];
   for (const [source, code, severity] of cases) {
-    const matching = (await diagnosticsFor(source, "bre", true)).find(
+    const matching = (await diagnosticsFor(source, "bre")).find(
       (value) => value.code === code,
     );
     assert.equal(matching?.severity, severity, source);
   }
 });
 
-test("anchors zero-width recovery to its local source artifact", async () => {
-  const values = await diagnosticsFor("/a**/p\n", "bre", true);
+test("preserves the grammar range for zero-width recovery", async () => {
+  const values = await diagnosticsFor("/a**/p\n", "bre");
   assert.deepEqual(values, [
     {
       startOffset: 3,
-      endOffset: 4,
+      endOffset: 3,
       severity: "warning",
       code: "adjacent-duplication-symbol",
       message:
@@ -89,26 +87,77 @@ test("anchors zero-width recovery to its local source artifact", async () => {
   ]);
 });
 
-test("deduplicates nested native errors without hiding independent recovery", async () => {
-  assert.deepEqual(codes(await diagnosticsFor("\0", "bre", true)), [
-    "syntax-error",
-  ]);
-  assert.deepEqual(codes(await diagnosticsFor("1!/\0", "bre", true)), [
+test("does not move missing syntax to a neighboring source token", async () => {
+  for (const [source, code, offset] of [
+    ["ra\n", "omitted-file-separator", 1],
+    [",,p\n", "additional-address", 1],
+    ["r\n", "missing-rfile", 1],
+  ]) {
+    const matching = (await diagnosticsFor(source, "bre")).find(
+      (value) => value.code === code,
+    );
+    assert.deepEqual(
+      [matching?.startOffset, matching?.endOffset],
+      [offset, offset],
+      source,
+    );
+  }
+});
+
+test("reports native errors and independent structured recovery", async () => {
+  assert.deepEqual(codes(await diagnosticsFor("\0", "bre")), ["syntax-error"]);
+  assert.deepEqual(codes(await diagnosticsFor("1!/\0", "bre")), [
     "unknown-function",
     "syntax-error",
   ]);
-  assert.deepEqual(codes(await diagnosticsFor("}a}", "bre", true)), [
+  assert.deepEqual(codes(await diagnosticsFor("}a}", "bre")), [
     "unmatched-closing-brace",
-    "missing-syntax",
+    "missing-command-separator",
+    "missing-command-separator",
     "missing-text-introducer",
-    "syntax-error",
+    "unmatched-closing-brace",
+  ]);
+});
+
+test("reports the innermost native syntax error", async () => {
+  assert.deepEqual(await diagnosticsFor("s\0p", "bre"), [
+    {
+      startOffset: 1,
+      endOffset: 2,
+      severity: "error",
+      code: "syntax-error",
+      message: "Syntax error.",
+    },
+  ]);
+});
+
+test("deduplicates indistinguishable syntax diagnostics", async () => {
+  assert.deepEqual(codes(await diagnosticsFor("{{", "bre")), [
+    "missing-closing-brace",
+    "missing-command-separator",
   ]);
 });
 
 test("reports every issue in a long incomplete command list", async () => {
-  const values = await diagnosticsFor("r\n".repeat(1000), "bre", true);
+  const values = await diagnosticsFor("r\n".repeat(1000), "bre");
   assert.equal(values.length, 1000);
   assert.ok(values.every(({ code }) => code === "missing-rfile"));
+});
+
+test("cancels diagnostics while traversing one large regular expression", async () => {
+  const analysis = await SedAnalysis.create("bre");
+  const snapshot = analysis.parse(`/${"a".repeat(20_000)}/p\n`);
+  const controller = new AbortController();
+  try {
+    const pending = analysis.diagnostics(snapshot, {
+      signal: controller.signal,
+    });
+    setImmediate(() => controller.abort());
+    await assert.rejects(pending, { name: "AbortError" });
+  } finally {
+    snapshot.dispose();
+    await analysis.dispose();
+  }
 });
 
 test("validates BRE pattern back-references against preceding groups", async () => {
@@ -181,6 +230,20 @@ test("validates replacement back-references in BRE and ERE modes", async () => {
     ),
     false,
   );
+
+  assert.ok(
+    codes(await diagnosticsFor("q\ns/a/\\1/\n")).includes(
+      "unmatched-replacement-backreference",
+    ),
+  );
+
+  const manyRanges = "2,3d\n".repeat(2000);
+  assert.equal(
+    codes(await diagnosticsFor(`${manyRanges}s/\\(a\\)/\\1/\n`)).includes(
+      "unmatched-replacement-backreference",
+    ),
+    false,
+  );
 });
 
 test("checks interval values without integer precision loss", async () => {
@@ -230,6 +293,32 @@ test("reports the unspecified global and occurrence flag combination", async () 
   );
 });
 
+test("rejects zero as a substitution occurrence flag", async () => {
+  for (const source of ["s/a/b/0\n", "s/a/b/00\n", "s/a/b/g0\n"]) {
+    const matching = (await diagnosticsFor(source)).filter(
+      ({ code }) =>
+        code === "invalid-substitution-flag" ||
+        code === "global-occurrence-combination",
+    );
+    assert.deepEqual(matching, [
+      {
+        startOffset: source.indexOf("0"),
+        endOffset: source.lastIndexOf("0") + 1,
+        severity: "error",
+        code: "invalid-substitution-flag",
+        message: "This is not a POSIX substitution flag.",
+      },
+    ]);
+  }
+
+  for (const source of ["s/a/b/1\n", "s/a/b/2047\n"]) {
+    assert.equal(
+      codes(await diagnosticsFor(source)).includes("invalid-substitution-flag"),
+      false,
+    );
+  }
+});
+
 test("decodes translation strings before comparing and finding duplicates", async () => {
   assert.ok(
     codes(await diagnosticsFor("y/a/xy/\n")).includes(
@@ -252,6 +341,45 @@ test("decodes translation strings before comparing and finding duplicates", asyn
   const malformed = codes(await diagnosticsFor("y/a\\q/b/\n"));
   assert.ok(malformed.includes("undefined-translation-escape"));
   assert.equal(malformed.includes("translation-length-mismatch"), false);
+
+  const independentlyMalformed = codes(await diagnosticsFor("y/aa/b\\q/\n"));
+  assert.ok(
+    independentlyMalformed.includes("duplicate-translation-source-character"),
+  );
+  assert.ok(independentlyMalformed.includes("undefined-translation-escape"));
+  assert.equal(
+    independentlyMalformed.includes("translation-length-mismatch"),
+    false,
+  );
+
+  assert.equal(
+    codes(await diagnosticsFor("y/é/ab/\n")).includes(
+      "translation-length-mismatch",
+    ),
+    false,
+  );
+});
+
+test("treats complete empty translation strings as zero characters", async () => {
+  for (const [source, expected] of [
+    ["y//a/\n", ["translation-length-mismatch"]],
+    ["y/a//\n", ["translation-length-mismatch"]],
+    [
+      "y/aa//\n",
+      ["duplicate-translation-source-character", "translation-length-mismatch"],
+    ],
+    ["y///\n", []],
+  ]) {
+    assert.deepEqual(
+      codes(await diagnosticsFor(source)).filter(
+        (code) =>
+          code.startsWith("translation-") ||
+          code.startsWith("duplicate-translation-"),
+      ),
+      expected,
+      source,
+    );
+  }
 });
 
 test("checks label portability, length, definitions, and references", async () => {
@@ -275,15 +403,15 @@ test("checks label portability, length, definitions, and references", async () =
   );
 });
 
-test("ignores labels inside native recovery", async () => {
+test("uses labels preserved through structured recovery", async () => {
   const labelCodes = (source) =>
     codes(source).filter((code) =>
       ["duplicate-label", "undefined-label"].includes(code),
     );
-  assert.deepEqual(labelCodes(await diagnosticsFor("b t\n{;:t")), [
+  assert.deepEqual(labelCodes(await diagnosticsFor("b t\n{;:t")), []);
+  assert.deepEqual(labelCodes(await diagnosticsFor("{;b t")), [
     "undefined-label",
   ]);
-  assert.deepEqual(labelCodes(await diagnosticsFor("{;b t")), []);
 });
 
 test("reports only encoding-independent label overflow", async () => {
@@ -364,6 +492,42 @@ test("tracks prior regular expressions through blocks and branches", async () =>
   );
 });
 
+test("retains context-address expressions only when the command is applied", async () => {
+  for (const [mode, source] of [
+    ["bre", "/a/q\ns//x/\n"],
+    ["ere", "/a/q\ns//x/\n"],
+    ["bre", "/a/!q\ns//x/\n"],
+  ]) {
+    assert.ok(
+      codes(await diagnosticsFor(source, mode)).includes(
+        "empty-regular-expression-without-previous",
+      ),
+      `${mode}: ${source}`,
+    );
+  }
+
+  assert.deepEqual(
+    codes(await diagnosticsFor("/\\(a\\)/q\ns//\\1/\n")).filter((code) =>
+      [
+        "empty-regular-expression-without-previous",
+        "unmatched-replacement-backreference",
+      ].includes(code),
+    ),
+    [
+      "empty-regular-expression-without-previous",
+      "unmatched-replacement-backreference",
+    ],
+  );
+});
+
+test("checks every context address that is evaluated", async () => {
+  assert.ok(
+    codes(await diagnosticsFor("1,//!p\n")).includes(
+      "empty-regular-expression-without-previous",
+    ),
+  );
+});
+
 test("stops at a quit command selected on the first input line", async () => {
   assert.equal(
     codes(await diagnosticsFor("1q\ns//x/\n")).includes(
@@ -391,6 +555,23 @@ test("tracks exact numeric addresses across input cycles", async () => {
   );
 });
 
+test("does not select a zero line-number address", async () => {
+  for (const source of ["0s//x/\n", "00s//x/\n"]) {
+    assert.equal(
+      codes(await diagnosticsFor(source)).includes(
+        "empty-regular-expression-without-previous",
+      ),
+      false,
+      source,
+    );
+  }
+  assert.ok(
+    codes(await diagnosticsFor("0!s//x/\n")).includes(
+      "empty-regular-expression-without-previous",
+    ),
+  );
+});
+
 test("preserves input-line strides without enumerating address values", async () => {
   const hugeOdd = "9".repeat(301);
   const hugeEven = `${hugeOdd.slice(0, -1)}8`;
@@ -406,6 +587,24 @@ test("preserves input-line strides without enumerating address values", async ()
       ),
       expected,
       source,
+    );
+  }
+});
+
+test("counts both input reads when final n or N starts the next cycle", async () => {
+  for (const command of ["n", "N"]) {
+    assert.ok(
+      codes(await diagnosticsFor(`2s/a/x/\n3s//y/\n${command}\n`)).includes(
+        "empty-regular-expression-without-previous",
+      ),
+      command,
+    );
+    assert.equal(
+      codes(await diagnosticsFor(`2s//\\1/\n${command}\n`)).includes(
+        "unmatched-replacement-backreference",
+      ),
+      false,
+      command,
     );
   }
 });
@@ -428,9 +627,25 @@ test("tracks two-address ranges across cycles and same-line restarts", async () 
   }
 });
 
+test("closes a numeric range at the first evaluated line at or after its end", async () => {
+  assert.ok(
+    codes(await diagnosticsFor("2d\n1,2d\ns//x/\n")).includes(
+      "empty-regular-expression-without-previous",
+    ),
+  );
+});
+
+test("keeps a last-line range active during a same-line restart", async () => {
+  assert.ok(
+    codes(await diagnosticsFor(":again\n$,//p\nb again\n")).includes(
+      "empty-regular-expression-without-previous",
+    ),
+  );
+});
+
 test("does not evaluate a second range address after a last-line start", async () => {
   assert.equal(
-    codes(await diagnosticsFor("/^\\(.*\\)$/p\n$,/b/p\ns//\\1/\n")).includes(
+    codes(await diagnosticsFor("s/^\\(.*\\)$/&/\n$,/b/p\ns//\\1/\n")).includes(
       "unmatched-replacement-backreference",
     ),
     false,
@@ -531,17 +746,71 @@ test("preserves every possible flow through duplicate label definitions", async 
   );
 });
 
+test("budgets only changed states across independent address ranges", async () => {
+  const ranges = Array.from(
+    { length: 31 },
+    (_, index) => `/a${index}/,${index * 3 + 3}s/x/y/`,
+  );
+  const groupedRanges = Array.from(
+    { length: 31 },
+    (_, index) => `/\\(a${index}\\)/,${index * 3 + 3}s/\\(x\\)/y/`,
+  );
+  assert.deepEqual(
+    await diagnosticsFor(["s/q/w/", ...ranges, "s//x/", ""].join("\n")),
+    [],
+  );
+  assert.deepEqual(
+    await diagnosticsFor(
+      ["s/\\(q\\)/w/", ...groupedRanges, "s//\\1/", ""].join("\n"),
+    ),
+    [],
+  );
+  assert.ok(
+    codes(await diagnosticsFor([...ranges, "s//x/", ""].join("\n"))).includes(
+      "empty-regular-expression-without-previous",
+    ),
+  );
+});
+
+test("falls back to coarse flow facts after many address ranges", async () => {
+  const ranges = Array(128).fill("/x/,/y/d");
+  assert.deepEqual(
+    await diagnosticsFor(["s/a/b/", ...ranges, "s//z/", ""].join("\n")),
+    [],
+  );
+
+  const groupedRanges = Array(128).fill("/\\(x\\)/,/\\(y\\)/d");
+  assert.deepEqual(
+    await diagnosticsFor(
+      ["s/\\(a\\)/b/", ...groupedRanges, "s//\\1/", ""].join("\n"),
+    ),
+    [],
+  );
+
+  assert.ok(
+    codes(await diagnosticsFor([...ranges, "s//z/", ""].join("\n"))).includes(
+      "empty-regular-expression-without-previous",
+    ),
+  );
+});
+
 test("handles many duplicate labels and branches without a quadratic graph", {
   timeout: 3000,
 }, async () => {
   const count = 2000;
-  const source = `${":target\n".repeat(count)}${"b target\n".repeat(count)}`;
+  const source = `${":target\n".repeat(count)}s//x/\n${"b target\n".repeat(count)}`;
+  const values = codes(await diagnosticsFor(source));
   assert.equal(
-    codes(await diagnosticsFor(source)).filter(
-      (code) => code === "duplicate-label",
-    ).length,
+    values.filter((code) => code === "duplicate-label").length,
     count,
   );
+  assert.ok(values.includes("empty-regular-expression-without-previous"));
+});
+
+test("analyzes a large diagnostic-free script in one CST pass", {
+  timeout: 3000,
+}, async () => {
+  assert.deepEqual(await diagnosticsFor("y/a/b/\n".repeat(50_000)), []);
 });
 
 test("collapses inert numeric selections before regular-expression flow", {

@@ -1,35 +1,51 @@
 import {
+  checkpointInterval,
+  cstIndex,
   functionForCommand,
-  nativeIssues,
-  structuredIssues,
+  indexedNodes,
   textForIndices,
 } from "./cst.js";
-import { assertSnapshot } from "./snapshot.js";
 
 const formattableOutcomes = new Set([
   "implementation_defined_syntax",
   "implementation_option_syntax",
 ]);
+const formattingNodeTypes = new Set(["default_output_suppression"]);
 const maximumFormattedSourceLength = 2 ** 24;
 
-function normalizeIndentation(options) {
+function booleanOption(options, name, defaultValue) {
+  const value = options?.[name];
+  if (value === undefined) {
+    return defaultValue;
+  }
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${name} must be a boolean.`);
+  }
+  return value;
+}
+
+function normalizeFormattingOptions(options) {
   if (
     options !== undefined &&
     (options === null || typeof options !== "object" || Array.isArray(options))
   ) {
     throw new TypeError("Sed formatting options must be an object.");
   }
-  const insertSpaces = options?.insertSpaces ?? true;
-  if (typeof insertSpaces !== "boolean") {
-    throw new TypeError("insertSpaces must be a boolean.");
+  const insertSpaces = booleanOption(options, "insertSpaces", true);
+  const width = options?.tabSize === undefined ? 2 : options.tabSize;
+  if (!Number.isSafeInteger(width) || width < 0) {
+    throw new TypeError("tabSize must be a non-negative safe integer.");
   }
-  const width = options?.tabSize ?? 2;
-  if (!Number.isSafeInteger(width) || width <= 0) {
-    throw new TypeError("tabSize must be a positive safe integer.");
-  }
-  return insertSpaces
-    ? { character: " ", width }
-    : { character: "\t", width: 1 };
+  // Rendered layout has no trailing whitespace of its own. Whitespace retained
+  // from the CST can be part of a sed operand and must not be trimmed.
+  booleanOption(options, "trimTrailingWhitespace", false);
+  return {
+    indent: insertSpaces
+      ? { character: " ", width }
+      : { character: "\t", width: 1 },
+    insertFinalNewline: booleanOption(options, "insertFinalNewline", true),
+    trimFinalNewlines: booleanOption(options, "trimFinalNewlines", false),
+  };
 }
 
 function structuralStart(command) {
@@ -41,15 +57,31 @@ function structuralStart(command) {
   );
 }
 
-function emptySeparator(emptyCommand) {
-  return emptyCommand.namedChildren.find(
-    ({ type }) => type === "command_separator",
-  );
+function separatorText(source, child) {
+  const separator =
+    child.type === "command_separator"
+      ? child
+      : child.type === "empty_command"
+        ? child.namedChildren.find(({ type }) => type === "command_separator")
+        : undefined;
+  return separator === undefined
+    ? undefined
+    : textForIndices(source, separator.startIndex, separator.endIndex);
 }
 
-function renderCommandList(source, commandList, indent) {
+function blockFields(functionNode) {
+  const verb = functionNode.childForFieldName("verb");
+  const commands = functionNode.childForFieldName("commands");
+  const closing = functionNode.childForFieldName("closing");
+  return verb === null || commands === null || closing === null
+    ? undefined
+    : { closing, commands, verb };
+}
+
+async function renderCommandList(source, commandList, indent, checkpoint) {
   const rendered = [];
   let renderedLength = 0;
+  let visited = 0;
 
   function appendLine(depth, text) {
     const prefixLength = indent.width * depth;
@@ -68,7 +100,7 @@ function renderCommandList(source, commandList, indent) {
 
   const frames = [
     {
-      commandList,
+      children: commandList.namedChildren,
       nextChildIndex: 0,
       depth: 0,
       skippedOpeningNewline: true,
@@ -77,8 +109,12 @@ function renderCommandList(source, commandList, indent) {
     },
   ];
   while (frames.length > 0) {
+    visited += 1;
+    if (checkpoint !== undefined && visited % checkpointInterval === 0) {
+      await checkpoint();
+    }
     const frame = frames.at(-1);
-    if (frame.nextChildIndex >= frame.commandList.namedChildCount) {
+    if (frame.nextChildIndex >= frame.children.length) {
       frames.pop();
       if (frame.closingLine !== undefined) {
         if (!appendLine(frame.closingLine.depth, frame.closingLine.text)) {
@@ -87,71 +123,56 @@ function renderCommandList(source, commandList, indent) {
       }
       continue;
     }
-    const child = frame.commandList.namedChild(frame.nextChildIndex);
+    const child = frame.children[frame.nextChildIndex];
     frame.nextChildIndex += 1;
-    if (child === null) {
-      continue;
-    }
     if (child.type === "editing_command") {
       const functionNode = functionForCommand(child);
-      if (functionNode?.type !== "block_function") {
-        if (
-          !appendLine(
-            frame.depth,
-            textForIndices(source, structuralStart(child), child.endIndex),
-          )
-        ) {
-          return undefined;
-        }
-        frame.awaitingCommandNewline = true;
-        frame.skippedOpeningNewline = true;
-        continue;
-      }
-
-      const verb = functionNode.childForFieldName("verb");
-      const commands = functionNode.childForFieldName("commands");
-      const closing = functionNode.childForFieldName("closing");
-      if (verb === null || commands === null || closing === null) {
-        continue;
+      const block =
+        functionNode?.type === "block_function"
+          ? blockFields(functionNode)
+          : undefined;
+      // A block the CST does not fully expose cannot be rendered without
+      // dropping source, so the document is left unformatted instead.
+      if (functionNode?.type === "block_function" && block === undefined) {
+        return undefined;
       }
       if (
         !appendLine(
           frame.depth,
-          textForIndices(source, structuralStart(child), verb.endIndex),
+          textForIndices(
+            source,
+            structuralStart(child),
+            block === undefined ? child.endIndex : block.verb.endIndex,
+          ),
         )
       ) {
         return undefined;
       }
       frame.awaitingCommandNewline = true;
       frame.skippedOpeningNewline = true;
-      frames.push({
-        commandList: commands,
-        nextChildIndex: 0,
-        depth: frame.depth + 1,
-        skippedOpeningNewline: false,
-        awaitingCommandNewline: false,
-        closingLine: {
-          depth: frame.depth,
-          text: textForIndices(source, closing.startIndex, closing.endIndex),
-        },
-      });
+      if (block !== undefined) {
+        frames.push({
+          children: block.commands.namedChildren,
+          nextChildIndex: 0,
+          depth: frame.depth + 1,
+          skippedOpeningNewline: false,
+          awaitingCommandNewline: false,
+          closingLine: {
+            depth: frame.depth,
+            text: textForIndices(
+              source,
+              block.closing.startIndex,
+              block.closing.endIndex,
+            ),
+          },
+        });
+      }
       continue;
     }
-    const separator =
-      child.type === "command_separator"
-        ? child
-        : child.type === "empty_command"
-          ? emptySeparator(child)
-          : undefined;
-    if (separator === undefined) {
-      continue;
-    }
-    const text = textForIndices(
-      source,
-      separator.startIndex,
-      separator.endIndex,
-    );
-    if (text !== "\n") {
+    // Written separators become line breaks: the newline that terminates a
+    // command is consumed, the newline that opens a block is dropped, and any
+    // other newline is a blank line the author wrote.
+    if (separatorText(source, child) !== "\n") {
       continue;
     }
     if (frame.awaitingCommandNewline) {
@@ -169,13 +190,26 @@ function renderCommandList(source, commandList, indent) {
   return rendered;
 }
 
-function canFormat(root) {
+function canFormat(index) {
   return (
-    nativeIssues(root).length === 0 &&
-    structuredIssues(root).every(({ outcome }) =>
+    index.nativeIssues.length === 0 &&
+    index.structuredIssues.every(({ outcome }) =>
       formattableOutcomes.has(outcome),
     )
   );
+}
+
+function joinLines(rendered, source, options) {
+  let lineCount = rendered.length;
+  if (options.trimFinalNewlines) {
+    while (lineCount > 0 && rendered[lineCount - 1] === "") {
+      lineCount -= 1;
+    }
+  }
+  const formatted = rendered.slice(0, lineCount).join("\n");
+  return options.insertFinalNewline || source.endsWith("\n")
+    ? `${formatted}\n`
+    : formatted;
 }
 
 function preserveDefaultOutputBehavior(defaultOutputSuppressed, formatted) {
@@ -185,11 +219,25 @@ function preserveDefaultOutputBehavior(defaultOutputSuppressed, formatted) {
   return formatted;
 }
 
-export function format(snapshot, options) {
-  assertSnapshot(snapshot);
-  const indent = normalizeIndentation(options);
+function preserveLeadingByteOrderMark(source, formatted) {
+  return source.startsWith("\uFEFF") ? `\uFEFF${formatted}` : formatted;
+}
+
+export async function analyzeFormatting(
+  snapshot,
+  options,
+  { checkpoint } = {},
+) {
+  const normalized = normalizeFormattingOptions(options);
   const { source, tree } = snapshot;
-  if (!canFormat(tree.rootNode)) {
+  if (source.length === 0) {
+    return undefined;
+  }
+  const index = await cstIndex(undefined, tree.rootNode, formattingNodeTypes, {
+    checkpoint,
+  });
+  await checkpoint?.();
+  if (!canFormat(index)) {
     return undefined;
   }
   const commandList = tree.rootNode.namedChildren.find(
@@ -198,21 +246,25 @@ export function format(snapshot, options) {
   const rendered =
     commandList === undefined
       ? []
-      : renderCommandList(source, commandList, indent);
+      : await renderCommandList(
+          source,
+          commandList,
+          normalized.indent,
+          checkpoint,
+        );
   if (rendered === undefined) {
     return undefined;
   }
-  const defaultOutputSuppressed =
-    tree.rootNode.descendantsOfType("default_output_suppression").length > 0;
-  const formatted = preserveDefaultOutputBehavior(
-    defaultOutputSuppressed,
-    `${rendered.join("\n")}\n`,
+  const suppressesDefaultOutput =
+    indexedNodes(index, "default_output_suppression").length > 0;
+  const formatted = preserveLeadingByteOrderMark(
+    source,
+    preserveDefaultOutputBehavior(
+      suppressesDefaultOutput,
+      joinLines(rendered, source, normalized),
+    ),
   );
-  if (formatted.length > maximumFormattedSourceLength) {
-    return undefined;
-  }
-  if (formatted === source) {
-    return undefined;
-  }
-  return formatted;
+  return formatted.length > maximumFormattedSourceLength || formatted === source
+    ? undefined
+    : formatted;
 }

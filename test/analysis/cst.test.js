@@ -1,28 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  cstIndex,
   descendants,
   functionForCommand,
-  labelSymbols,
-  nativeIssues,
   rangeForNode,
-  structuredIssues,
   textForIndices,
   textForNode,
 } from "../../src/analysis/cst.js";
-import { withAnalysisSnapshot } from "./helpers.js";
+import { ParserEngine } from "../../src/analysis/engine.js";
 
 async function withTree(mode, source, callback) {
-  return withAnalysisSnapshot(mode, source, ({ tree }) =>
-    callback(source, tree.rootNode),
-  );
+  const parser = await ParserEngine.create(mode);
+  const tree = parser.parse(source);
+  try {
+    return await callback(source, tree.rootNode);
+  } finally {
+    tree.delete();
+    parser.delete();
+  }
 }
 
 test("projects POSIX editing functions and labels in source order", async () => {
   await withTree(
     "bre",
     ":start\n1,2{\nb start\nt end\n}\n:end\n",
-    (source, root) => {
+    async (source, root) => {
       assert.deepEqual(
         descendants(root, "editing_command").map(
           (command) => functionForCommand(command)?.type,
@@ -35,7 +38,7 @@ test("projects POSIX editing functions and labels in source order", async () => 
           "label_function",
         ],
       );
-      const symbols = labelSymbols(source, root);
+      const symbols = (await cstIndex(source, root)).symbols;
       assert.deepEqual(
         symbols.map(({ kind, name }) => [kind, name]),
         [
@@ -58,10 +61,10 @@ test("projects POSIX editing functions and labels in source order", async () => 
 });
 
 test("preserves carriage returns in source-backed label names", async () => {
-  await withTree("bre", ":same\r\n:same\n", (source, root) => {
+  await withTree("bre", ":same\r\n:same\n", async (source, root) => {
     assert.equal(textForIndices(source, 1, 6), "same\r");
     assert.deepEqual(
-      labelSymbols(source, root).map(({ name }) => name),
+      (await cstIndex(source, root)).symbols.map(({ name }) => name),
       ["same\r", "same"],
     );
   });
@@ -87,31 +90,30 @@ test("extracts every structured outcome without interpreting it", async () => {
     ["ere", "1! p\n", "unspecified_syntax", "blanks_after_negation"],
   ];
   for (const [mode, source, outcome, reason] of cases) {
-    await withTree(mode, source, (_source, root) => {
+    await withTree(mode, source, async (_source, root) => {
       assert.deepEqual(
-        structuredIssues(root).map((issue) => [issue.outcome, issue.reason]),
+        (await cstIndex(undefined, root)).structuredIssues.map((issue) => [
+          issue.outcome,
+          issue.reason,
+        ]),
         [[outcome, reason]],
       );
     });
   }
 });
 
-test("keeps native errors and missing nodes separate from structured issues", async () => {
-  await withTree("bre", "},\0", (_source, root) => {
-    const native = nativeIssues(root);
+test("keeps native errors separate from structured issues", async () => {
+  await withTree("bre", "},\0", async (_source, root) => {
+    const index = await cstIndex(undefined, root);
     assert.ok(
-      native.some(({ kind }) => kind === "error"),
+      index.nativeIssues.some(({ kind }) => kind === "error"),
       root.toString(),
     );
-    assert.ok(
-      native.some(({ kind }) => kind === "missing"),
-      root.toString(),
-    );
-    assert.ok(structuredIssues(root).length > 0, root.toString());
+    assert.ok(index.structuredIssues.length > 0, root.toString());
   });
 });
 
-test("rejects a structured issue without its required outcome", () => {
+test("rejects a structured issue without its required outcome", async () => {
   const issue = {
     type: "syntax_issue",
     namedChildCount: 0,
@@ -119,7 +121,7 @@ test("rejects a structured issue without its required outcome", () => {
     children: [],
   };
   const root = { type: "script", children: [issue] };
-  assert.throws(() => structuredIssues(root), {
+  await assert.rejects(cstIndex(undefined, root), {
     message: "syntax_issue must have exactly one named child.",
   });
 });

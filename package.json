@@ -4,6 +4,7 @@
   "description": "Language server for POSIX.1-2024 sed.",
   "type": "module",
   "files": [
+    "bin",
     "src",
     "vendor"
   ],
@@ -11,15 +12,17 @@
     "./analysis": "./src/analysis/index.js"
   },
   "bin": {
-    "sed-language-server": "src/server.js"
+    "sed-language-server": "bin/sed-language-server.js"
   },
   "scripts": {
     "build:grammar": "node scripts/build-tree-sitter-posix-sed-wasm.js",
     "check": "biome check .",
     "check:write": "biome check --write .",
-    "prepublishOnly": "npm run check && npm test",
-    "start": "node src/server.js --stdio",
-    "test": "node --test \"test/**/*.test.js\""
+    "prepublishOnly": "npm run check && npm run verify:grammar && npm test",
+    "start": "node bin/sed-language-server.js --stdio",
+    "test": "npm run test:unit",
+    "test:unit": "node --test --test-timeout=20000 \"test/**/*.test.js\"",
+    "verify:grammar": "node scripts/build-tree-sitter-posix-sed-wasm.js --verify"
   },
   "license": "MIT",
   "repository": {
@@ -46,6 +49,6 @@
     "tree-sitter-cli": "0.26.11"
   },
   "allowScripts": {
-    "tree-sitter-cli": true
+    "tree-sitter-cli@0.26.11": true
   }
 }
